@@ -52,6 +52,7 @@ Zeit und Tokens wurden aus dem lokalen Gesprächsverlauf von Claude Code berechn
 | 45 | Git | GitHub Pages einschalten, damit der Lehrer Doku und Webseite direkt im Browser sieht | Pages aktiviert (Branch main), README um direkte Links ergänzt, hochgeladen; Links ohne Login geprüft | – | – |
 | 46 | Git | Wirklich alles durchgetestet? | Ehrlich: einzeln ja, nach dem Hochladen noch nicht komplett → Komplett-Test aus frischem GitHub-Klon: Python, C (+ Fehlerfälle), TicTacToe-Messung, Webseite, TensorFlow, Quarto, Live-Webseite auf Pages (12 Prüfungen inkl. 4520 TicTacToe-Stellungen), Links, fehlende Netz-Dateien → alles OK | – | – |
 | 47 | Git | Klick auf `dokumentation.html` im Repo zeigt nur „View raw / too big“, der Pages-Link geht | README-Tabellen-Link auf die GitHub-Pages-Adresse umgestellt, hochgeladen und geprüft | – | – |
+| 48 | – | Projekt fertig; für das nächste Projekt (Ordner „Radon Data Analysis“) CLAUDE.md mit allen Regeln + Vorlagen für PLAN, PROMPTS, DOKUMENTATION anlegen | Vier Dateien im neuen Ordner angelegt: CLAUDE.md mit allgemeinen Regeln, Erfahrungen, Werkzeugen und Start-Anweisung (erst lesen, dann auf Projekterklärung warten) | – | – |
 
 ## Zeit und Tokens – Zusammenfassung
 
