@@ -15,7 +15,7 @@ Ein neuronales Netz, **komplett selbst programmiert** mit Python und numpy (ohne
 
 | Datei | Inhalt |
 |---|---|
-| **[`dokumentation.html`](dokumentation.html)** | **Abgabe-Doku (Quarto):** Vorgehen, was gut lief und wo wir nachbessern mussten, Ergebnisse, Technik kompakt. Am besten über den Link oben öffnen. |
+| **[`dokumentation.html`](https://aldin-122.github.io/neuronales-netz-from-scratch/dokumentation.html)** | **Abgabe-Doku (Quarto):** Vorgehen, was gut lief und wo wir nachbessern mussten, Ergebnisse, Technik kompakt. Öffnet direkt als Webseite. |
 | [`DOKUMENTATION.md`](DOKUMENTATION.md) | Ausführliche technische Doku: Theorie mit Formeln, Code, Ergebnisse, Entscheidungen |
 | [`PROMPTS.md`](PROMPTS.md) | Alle Prompts an die KI (Claude Code) mit Ergebnis, Zeit und Tokens |
 | [`PLAN.md`](PLAN.md) | Der Phasenplan mit Status |

@@ -50,6 +50,8 @@ Zeit und Tokens wurden aus dem lokalen Gesprächsverlauf von Claude Code berechn
 | 43 | Quarto | Befehl zum Starten der Website | `cd …/Neuronales_Netzwerk && python3 gui_7seg.py` | – | – |
 | 44 | Git | Abgabe an den Lehrer über ein Git-Repo mit Link; KI darf alles übernehmen, Passwörter gibt der Nutzer selbst ein | Rückfragen: GitHub, öffentlich, Angabe-PDF mit; Projekt auf private Daten geprüft (ein temporärer Pfad im Log entfernt); `.gitignore` (ohne .venv-tf, Kompilate, Zwischendateien) + `README.md` als Startseite; Git-Repo angelegt und hochgeladen | – | – |
 | 45 | Git | GitHub Pages einschalten, damit der Lehrer Doku und Webseite direkt im Browser sieht | Pages aktiviert (Branch main), README um direkte Links ergänzt, hochgeladen; Links ohne Login geprüft | – | – |
+| 46 | Git | Wirklich alles durchgetestet? | Ehrlich: einzeln ja, nach dem Hochladen noch nicht komplett → Komplett-Test aus frischem GitHub-Klon: Python, C (+ Fehlerfälle), TicTacToe-Messung, Webseite, TensorFlow, Quarto, Live-Webseite auf Pages (12 Prüfungen inkl. 4520 TicTacToe-Stellungen), Links, fehlende Netz-Dateien → alles OK | – | – |
+| 47 | Git | Klick auf `dokumentation.html` im Repo zeigt nur „View raw / too big“, der Pages-Link geht | README-Tabellen-Link auf die GitHub-Pages-Adresse umgestellt, hochgeladen und geprüft | – | – |
 
 ## Zeit und Tokens – Zusammenfassung
 
