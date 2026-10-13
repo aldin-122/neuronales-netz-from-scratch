@@ -1,0 +1,2663 @@
+<!doctype html>
+<!--
+  Vorlage für die Webseite des Projekts. NICHT direkt öffnen:
+  gui_7seg.py setzt hier die trainierten Netze ein und erzeugt daraus web/7seg.html.
+
+  Zwei Ansichten, umgeschaltet über die Adresse (#tictactoe) - so funktioniert auch der Zurück-Button:
+    1. 7-Segment-Decoder: links Seitenleiste (Eingabe, Status, Anzeige, Legende),
+       rechts füllt das Netzdiagramm den restlichen Platz und passt sich an die Fenstergröße an.
+    2. TicTacToe: das TicTacToe-Netz spielt gegen dich.
+
+  Optionale URL-Parameter (praktisch zum Testen):
+    ?bits=0101   startet mit dieser Eingabe
+    ?fokus=1,0   markiert ein Neuron wie beim Darüberfahren mit der Maus (Layer, Index)
+    #tictactoe&  (Adresse endet auf #tictactoe) öffnet direkt das Spiel
+    ?ttt=4,0     spielt diese Felder für mich, das Netz antwortet sofort; ?gedanken zeigt die Netz-Gedanken
+    ?test        schreibt die Ausgaben für alle 16 Eingaben und einen simulierten Klick-Test
+                 in <pre id="test"> (wird von Python ausgewertet)
+-->
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>7-Segment-Decoder</title>
+<style>
+  :root {
+    --hintergrund: #0d0f14;
+    --leiste: #151821;
+    --flaeche: #1c202b;
+    --rand: #2a2f3d;
+    --text: #e8eaf0;
+    --grau: #8b91a3;
+    --akzent: #fbbf24;      /* aktive Neuronen */
+    --segment: #ff3b3b;     /* leuchtende Segmente / gesetzte Bits */
+    --positiv: #4f8cff;
+    --negativ: #ff5a5a;
+    --gruen: #34d399;
+    --gelb: #fbbf24;
+    --rot: #f87171;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--hintergrund);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  [hidden] { display: none !important; }   /* ausgeblendete Ansicht wirklich verstecken */
+  #ansicht-7seg {
+    display: grid;
+    grid-template-columns: clamp(400px, 30vw, 520px) 1fr;
+    height: 100%;
+    overflow: hidden;
+  }
+  #zum-spiel {
+    background: linear-gradient(135deg, #2b3350, #1f2536);
+    border-color: #3b4566; font-size: 16px; font-weight: 600;
+  }
+  #zum-spiel:hover { border-color: var(--positiv); }
+
+  /* ---------------- Seitenleiste ---------------- */
+  aside {
+    background: var(--leiste);
+    border-right: 1px solid var(--rand);
+    padding: 28px 34px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    overflow-y: auto;
+  }
+  h1 { font-size: 26px; margin: 0; letter-spacing: -0.01em; }
+  .nowrap { white-space: nowrap; }
+  .untertitel { color: var(--grau); font-size: 14px; margin: 6px 0 0; line-height: 1.45; }
+  .abschnitt-titel { font-size: 11px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--grau); margin: 0 0 10px; }
+
+  .ziffern { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  button {
+    font: inherit; font-size: 18px; height: 48px;
+    border-radius: 10px; border: 1px solid var(--rand);
+    background: var(--flaeche); color: var(--text); cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, transform 0.1s;
+  }
+  button:hover { background: #262b39; }
+  button:active { transform: scale(0.96); }
+  button.gewaehlt { border-color: var(--segment); box-shadow: 0 0 0 1px var(--segment) inset; }
+
+  .bits { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .bit { display: flex; flex-direction: column; align-items: center; gap: 5px; font-size: 11px; color: var(--grau); }
+  .bit button { width: 100%; font-family: Menlo, Consolas, monospace; font-weight: 700; font-size: 22px; }
+  .bit button.an { background: var(--segment); border-color: var(--segment); color: #fff; box-shadow: 0 0 14px rgba(255, 59, 59, 0.45); }
+
+  #info { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  #info .code { font-family: Menlo, Consolas, monospace; font-size: 22px; }
+  .chip { font-size: 13px; padding: 4px 10px; border-radius: 999px; }
+  .chip.richtig { background: rgba(52, 211, 153, 0.14); color: var(--gruen); }
+  .chip.falsch { background: rgba(248, 113, 113, 0.14); color: var(--rot); }
+  .chip.unbekannt { background: rgba(251, 191, 36, 0.14); color: var(--gelb); }
+
+  .anzeige-rahmen { background: #0a0b0f; border: 1px solid var(--rand); border-radius: 14px; padding: 16px; display: flex; justify-content: center; }
+  #segmente { height: clamp(150px, 21vh, 285px); aspect-ratio: 2 / 3; overflow: visible; }
+  /* Elemente der Seitenleiste nie zusammenquetschen - lieber scrollen */
+  aside > * { flex-shrink: 0; }
+  /* Übergänge erst aktiv, wenn die Seite fertig gezeichnet ist (sonst "fährt" beim Öffnen alles hoch) */
+  body.bereit #segmente polygon { transition: fill 0.25s, filter 0.25s; }
+
+  .legende { margin-top: auto; display: grid; gap: 7px; font-size: 13.5px; color: var(--grau); }
+  .legende span { display: flex; align-items: center; gap: 9px; }
+  .strich { width: 26px; height: 4px; border-radius: 2px; flex: none; }
+  .punkt { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+  .hinweis { font-size: 13px; color: var(--grau); border-top: 1px solid var(--rand); padding-top: 10px; margin-top: 4px; line-height: 1.45; }
+  .legende .abschnitt-titel { margin: 0 0 2px; }
+
+  /* ---------------- Netzdiagramm ---------------- */
+  #buehne { position: relative; min-width: 0; min-height: 0; }
+  #netzbild { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #netzbild circle { cursor: pointer; }
+  body.bereit #netzbild line { transition: stroke var(--dauer, 0.35s), stroke-width var(--dauer, 0.35s), stroke-opacity var(--dauer, 0.35s); }
+  body.bereit #netzbild circle { transition: fill var(--dauer, 0.35s), opacity 0.2s; }
+  #netzbild .wert { font-family: Menlo, Consolas, monospace; }
+  /* Fokus: Maus über einem Neuron -> nur seine Verbindungen bleiben sichtbar */
+  #netzbild.fokus line:not(.hervor) { stroke-opacity: 0.03 !important; }
+  #netzbild.fokus circle:not(.hervor) { opacity: 0.35; }
+
+  #tooltip {
+    position: fixed; pointer-events: none; z-index: 10;
+    background: rgba(21, 24, 33, 0.96); border: 1px solid var(--rand); border-radius: 10px;
+    padding: 10px 12px; font-size: 13px; line-height: 1.55; min-width: 190px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4); display: none;
+  }
+  #tooltip b { color: var(--akzent); font-weight: 600; }
+  #tooltip .zahl { font-family: Menlo, Consolas, monospace; }
+
+  /* Schmale Fenster: Seitenleiste oben, Netz darunter */
+  @media (max-width: 900px) {
+    /* height: auto - sonst bleibt die Seite auf Bildschirmhöhe begrenzt und die Leiste wird abgeschnitten */
+    html, body { height: auto; }
+    #ansicht-7seg { grid-template-columns: 1fr; height: auto; overflow: visible; }
+    aside { border-right: 0; border-bottom: 1px solid var(--rand); overflow: visible; }
+    #buehne { height: 80vh; }
+  }
+
+  /* ---------------- TicTacToe-Ansicht ---------------- */
+  #ansicht-ttt { height: 100%; display: flex; flex-direction: column; }
+  .ttt-kopf { padding: 16px 28px; background: var(--leiste); border-bottom: 1px solid var(--rand); }
+  #zurueck { height: 40px; padding: 0 16px; font-size: 15px; }
+  .ttt-inhalt { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr clamp(340px, 28vw, 440px); }
+  .ttt-spiel { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 26px; padding: 24px; }
+  .brett { --groesse: min(64vh, 540px, 88vw); width: var(--groesse); height: var(--groesse);
+           display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .feld {
+    height: auto; border-radius: 18px; font-size: calc(var(--groesse) / 5); line-height: 1;
+    display: flex; align-items: center; justify-content: center; font-weight: 300;
+  }
+  .feld:disabled { cursor: default; }
+  .feld:disabled:hover { background: var(--flaeche); }
+  .feld:disabled:active { transform: none; }
+  .feld.x { color: var(--positiv); text-shadow: 0 0 18px rgba(79, 140, 255, 0.55); }
+  .feld.o { color: var(--akzent); text-shadow: 0 0 18px rgba(251, 191, 36, 0.55); }
+  .feld.gewinn { background: rgba(52, 211, 153, 0.13); border-color: var(--gruen); }
+  .ttt-status { font-size: 21px; min-height: 1.4em; }
+  .ttt-leiste { background: var(--leiste); border-left: 1px solid var(--rand); padding: 30px 32px;
+                display: flex; flex-direction: column; gap: 22px; overflow-y: auto; }
+  .zwei { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .zwei button { font-size: 15px; }
+  .punkte { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; }
+  .punkte div { background: var(--flaeche); border: 1px solid var(--rand); border-radius: 12px; padding: 10px 4px; font-size: 12px; color: var(--grau); }
+  .punkte b { display: block; font-size: 28px; color: var(--text); font-family: Menlo, Consolas, monospace; margin-bottom: 2px; }
+  .schalter { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 15px; }
+  .schalter input { width: 18px; height: 18px; accent-color: var(--akzent); }
+  .mini-brett { display: grid; grid-template-columns: repeat(3, 64px); gap: 6px; }
+  .mini-feld { height: 64px; border-radius: 10px; background: var(--flaeche); border: 1px solid var(--rand);
+               display: flex; align-items: center; justify-content: center; font-family: Menlo, Consolas, monospace; font-size: 15px; }
+  .mini-feld.stein { color: #5d6376; font-size: 22px; font-family: inherit; }
+  .mini-feld.wahl { outline: 2px solid var(--akzent); outline-offset: 2px; }
+  .zeichen-x { color: var(--positiv); }
+  .zeichen-o { color: var(--akzent); }
+  @media (max-width: 900px) {
+    .ttt-inhalt { grid-template-columns: 1fr; }
+    .ttt-leiste { border-left: 0; border-top: 1px solid var(--rand); }
+  }
+  #test { display: none; }
+</style>
+</head>
+<body>
+<div id="ansicht-7seg">
+<aside>
+  <div>
+    <h1>7-Segment-Decoder</h1>
+    <p class="untertitel">Selbst programmiertes neuronales Netz <span class="nowrap">4 → 16 → 7</span>: aus 4&nbsp;Bits werden die Segmente <span class="nowrap">a–g</span>.</p>
+  </div>
+
+  <div>
+    <p class="abschnitt-titel">Ziffer</p>
+    <div class="ziffern" id="ziffern"></div>
+  </div>
+
+  <div>
+    <p class="abschnitt-titel">Bits</p>
+    <div class="bits" id="bits"></div>
+  </div>
+
+  <div id="info"></div>
+
+  <div class="anzeige-rahmen">
+    <svg id="segmente" viewBox="0 0 200 300" aria-label="7-Segment-Anzeige"></svg>
+  </div>
+
+  <button id="zum-spiel">TicTacToe gegen das Netz spielen →</button>
+
+  <div class="legende">
+    <p class="abschnitt-titel">Linie = Signal (Gewicht × Aktivierung)</p>
+    <span><i class="strich" style="background: var(--positiv)"></i> positiv – schiebt Richtung 1 · dick = stark</span>
+    <span><i class="strich" style="background: var(--negativ)"></i> negativ – schiebt Richtung 0 · blass = kaum</span>
+    <span><i class="punkt" style="background: var(--akzent); box-shadow: 0 0 8px var(--akzent)"></i> Neuron aktiv (hell = nahe 1)</span>
+    <span class="hinweis">Maus über ein Neuron zeigt nur seine Verbindungen und seine Rechnung.</span>
+  </div>
+</aside>
+
+<main id="buehne">
+  <svg id="netzbild" aria-label="Netzdiagramm 4-16-7">
+    <defs>
+      <!-- Weicher Leuchteffekt für aktive Neuronen -->
+      <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+        <feGaussianBlur stdDeviation="5" result="unschaerfe"/>
+        <feMerge><feMergeNode in="unschaerfe"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+  </svg>
+</main>
+</div>
+
+<div id="ansicht-ttt" hidden>
+  <header class="ttt-kopf">
+    <button id="zurueck">← Zurück zum 7-Segment-Decoder</button>
+  </header>
+  <div class="ttt-inhalt">
+    <section class="ttt-spiel">
+      <div class="brett" id="brett"></div>
+      <div class="ttt-status" id="ttt-status"></div>
+    </section>
+    <aside class="ttt-leiste">
+      <div>
+        <h1>TicTacToe</h1>
+        <p class="untertitel">Unser Netz <span class="nowrap">9 → 64 → 9</span> hat die besten Züge von einem perfekten
+          Minimax-Spieler gelernt. Du spielst <span class="zeichen-x">✕</span>, das Netz <span class="zeichen-o">◯</span>.</p>
+      </div>
+      <div>
+        <p class="abschnitt-titel">Neues Spiel</p>
+        <div class="zwei">
+          <button id="ich-beginne">Ich beginne</button>
+          <button id="netz-beginnt">Netz beginnt</button>
+        </div>
+      </div>
+      <div>
+        <p class="abschnitt-titel">Punktestand (aus deiner Sicht)</p>
+        <div class="punkte">
+          <div><b id="p-sieg">0</b>Siege</div>
+          <div><b id="p-remis">0</b>Remis</div>
+          <div><b id="p-niederlage">0</b>Niederlagen</div>
+        </div>
+      </div>
+      <label class="schalter"><input type="checkbox" id="gedanken"> Netz-Gedanken anzeigen</label>
+      <div id="gedanken-box" hidden>
+        <p class="abschnitt-titel">So hat das Netz seinen letzten Zug gewählt</p>
+        <div class="mini-brett" id="mini-brett"></div>
+        <p class="hinweis">Zahl = Ausgabe des Netzes für dieses Feld. Es setzt auf das freie Feld mit dem höchsten
+          Wert (umrandet). Rückblickend angezeigt, damit es dir keinen Tipp für deinen Zug verrät.</p>
+      </div>
+    </aside>
+  </div>
+</div>
+<div id="tooltip"></div>
+<pre id="test"></pre>
+
+<script>
+// Wird von gui_7seg.py ersetzt: das Netz im Format von dump_json() und die Sollwerte Y_7SEG
+const NETZ = {
+  "layer_sizes": [
+    4,
+    16,
+    7
+  ],
+  "activation": "sigmoid",
+  "learning_rate": 0.1,
+  "layers": [
+    [
+      {
+        "weights": [
+          4.298265261620979,
+          4.665046061361931,
+          -5.007531467257859,
+          -0.34811915887854195
+        ],
+        "bias": -2.072288280508038
+      },
+      {
+        "weights": [
+          2.374826917238046,
+          -4.303345873430687,
+          4.380404321606656,
+          -4.454100408788373
+        ],
+        "bias": 1.2162434281404355
+      },
+      {
+        "weights": [
+          4.296648114098017,
+          -4.845282500423821,
+          5.272339759382783,
+          -4.875607943173753
+        ],
+        "bias": 1.5704100717984495
+      },
+      {
+        "weights": [
+          1.3835735273860994,
+          0.7132121440834357,
+          1.6138489365975197,
+          -0.5002728801706535
+        ],
+        "bias": -0.36446124941820646
+      },
+      {
+        "weights": [
+          0.8710723220188209,
+          1.6529620723307714,
+          2.027078606947281,
+          4.087496342472842
+        ],
+        "bias": -3.6790503456238
+      },
+      {
+        "weights": [
+          -1.700878846691008,
+          4.446716744377711,
+          -4.231831351186438,
+          1.4573670575968343
+        ],
+        "bias": 1.5794639307555014
+      },
+      {
+        "weights": [
+          1.9847101667707836,
+          -1.7484835212856005,
+          -1.768843257304778,
+          -3.3876190029227318
+        ],
+        "bias": 1.8866430966339955
+      },
+      {
+        "weights": [
+          -1.7089617759622067,
+          -4.022355875492483,
+          3.5994592683958286,
+          3.368034374222827
+        ],
+        "bias": -1.8210437676514961
+      },
+      {
+        "weights": [
+          2.3583658597421087,
+          2.887203413812076,
+          -2.992985902890031,
+          -5.056623637603489
+        ],
+        "bias": -0.919761560239688
+      },
+      {
+        "weights": [
+          0.17872857884656626,
+          2.5053483095258606,
+          -4.140079196039615,
+          5.190296439671947
+        ],
+        "bias": 0.38532492972398774
+      },
+      {
+        "weights": [
+          -0.14968963193372983,
+          -3.072046601220129,
+          -3.3848133817845096,
+          -1.0787989472522312
+        ],
+        "bias": 1.811491143457281
+      },
+      {
+        "weights": [
+          0.19846070021023304,
+          -4.540188727532708,
+          2.640634291898147,
+          3.2483986990430016
+        ],
+        "bias": -1.7306018221062418
+      },
+      {
+        "weights": [
+          3.9745323460656747,
+          6.146422536582532,
+          -4.343175657719401,
+          -2.704338989368291
+        ],
+        "bias": -0.8422435300557938
+      },
+      {
+        "weights": [
+          -0.04610418790731791,
+          -2.039932043465347,
+          0.1155540092146647,
+          4.263248077083243
+        ],
+        "bias": 0.350026132010989
+      },
+      {
+        "weights": [
+          2.2594970125524823,
+          -1.337714673763772,
+          0.22775555062017896,
+          -1.1505495532827292
+        ],
+        "bias": -0.1359134713589509
+      },
+      {
+        "weights": [
+          -0.2973046780374377,
+          -0.034993148144558985,
+          3.5785010932905488,
+          -0.6476345202660821
+        ],
+        "bias": -0.9386577282138587
+      }
+    ],
+    [
+      {
+        "weights": [
+          0.16872168512821212,
+          4.736653892768839,
+          5.844112052059933,
+          1.7432868477812018,
+          4.462173890132456,
+          -2.2456580046182886,
+          -0.5609669219779064,
+          -1.8728769368063727,
+          -3.7084823096397157,
+          -2.6066803956623117,
+          -2.88288896826933,
+          -2.868313363347249,
+          1.919807529435676,
+          2.9518019687170978,
+          0.5404839027164411,
+          2.8678792017190866
+        ],
+        "bias": -0.3737012877059159
+      },
+      {
+        "weights": [
+          -0.6739868075730103,
+          -1.3465369439875952,
+          -2.975365219992341,
+          0.9461354061049776,
+          -2.505004871319385,
+          -1.1517264017303745,
+          3.667633367197001,
+          3.447275726927324,
+          4.405717697348641,
+          3.3144363087825313,
+          2.8599836312952305,
+          3.8196898843149056,
+          -4.606350497453055,
+          -0.8838967278026206,
+          2.130735179386486,
+          0.9831034728980583
+        ],
+        "bias": 0.1723028017940737
+      },
+      {
+        "weights": [
+          1.9027966380845862,
+          -2.5607010652785163,
+          -1.9666798398314298,
+          0.23332342706813616,
+          2.396126997665739,
+          4.09205703496294,
+          -1.508746391355656,
+          -0.42981266101395077,
+          1.1926695394776337,
+          4.509367874342664,
+          0.9513615127848506,
+          0.1205339687444454,
+          2.54861535656585,
+          0.9679288823199809,
+          -0.6248664245907806,
+          -0.8107855674451332
+        ],
+        "bias": 1.0800247885711478
+      },
+      {
+        "weights": [
+          3.2400806628380088,
+          4.980051547240245,
+          5.481027476045314,
+          -1.0047177814925288,
+          3.890820680309553,
+          -2.8864638438256947,
+          -0.45155890512305574,
+          -2.891793673440934,
+          -3.6018780709906997,
+          -3.044012538913738,
+          0.6176068859754772,
+          -1.7754720998738325,
+          2.4311181404978153,
+          3.1165541233560945,
+          0.7144430835622113,
+          -2.0955112844180244
+        ],
+        "bias": -0.6437412683980988
+      },
+      {
+        "weights": [
+          -1.1689135075783392,
+          3.7304202844522134,
+          4.184675144646225,
+          0.48094580962305594,
+          -2.624327410315959,
+          -1.144839444641057,
+          2.9744951299217575,
+          -2.129213332694708,
+          0.7141620666370396,
+          -4.143901364211513,
+          -0.1501420547566306,
+          -2.4436251281497063,
+          -0.6062296950462944,
+          -1.5509216952888107,
+          0.9267684337587568,
+          0.7393897070696458
+        ],
+        "bias": -0.070680057763792
+      },
+      {
+        "weights": [
+          4.430911214956305,
+          -0.5025810175866628,
+          1.3263027186135516,
+          0.6116756186799376,
+          -1.3757861497140094,
+          1.7423030106990798,
+          2.1169818638426237,
+          -3.5673572962876015,
+          3.192311357067695,
+          0.1094381922627961,
+          0.055829960014411185,
+          -2.3017260660078684,
+          3.7125974417726644,
+          -1.8710727513467125,
+          1.0982144384238868,
+          -1.8625893542824625
+        ],
+        "bias": 0.2240487033071058
+      },
+      {
+        "weights": [
+          6.810304767684086,
+          2.361967430534822,
+          3.2860631746204794,
+          0.6144111844171278,
+          1.6944067044925235,
+          -5.006011139932119,
+          -2.2354424382026505,
+          0.160562416801976,
+          1.2527437397844385,
+          -1.7707719145361496,
+          -3.926730141557799,
+          2.0810585247573035,
+          5.705095645066745,
+          -0.8483258553411739,
+          0.3110315602260499,
+          -0.16549656035438107
+        ],
+        "bias": -0.9465518116586362
+      }
+    ]
+  ]
+};
+const SOLL = [[1, 1, 1, 1, 1, 1, 0], [0, 1, 1, 0, 0, 0, 0], [1, 1, 0, 1, 1, 0, 1], [1, 1, 1, 1, 0, 0, 1], [0, 1, 1, 0, 0, 1, 1], [1, 0, 1, 1, 0, 1, 1], [1, 0, 1, 1, 1, 1, 1], [1, 1, 1, 0, 0, 0, 0], [1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 1, 1]];
+// Das TicTacToe-Netz (9 -> 64 -> 9), trainiert von tictactoe.py
+const TTT = {
+  "layer_sizes": [
+    9,
+    64,
+    9
+  ],
+  "activation": "sigmoid",
+  "learning_rate": 0.1,
+  "layers": [
+    [
+      {
+        "weights": [
+          1.318666208560536,
+          0.48222912127578843,
+          0.19793250967220996,
+          0.7372075943030336,
+          0.25905098216549954,
+          -12.985424331370986,
+          3.203871635055352,
+          3.4583831396015965,
+          3.254298477505764
+        ],
+        "bias": -5.121155043988363
+      },
+      {
+        "weights": [
+          -0.48718244641118724,
+          -1.8933262494593843,
+          0.1158772130517208,
+          -0.4290068836128278,
+          -0.2479691929969585,
+          8.333230401908665,
+          -0.5939545212287314,
+          0.13983841324976976,
+          -0.7152115574798301
+        ],
+        "bias": -4.561906145404969
+      },
+      {
+        "weights": [
+          0.3779631989795483,
+          -0.5969084777030987,
+          -0.09383303880154398,
+          0.57581593250902,
+          -0.2939853913321411,
+          -0.41997621382781897,
+          6.5480785133320545,
+          -0.29292429848441226,
+          -0.18647361477400598
+        ],
+        "bias": -5.233025661512518
+      },
+      {
+        "weights": [
+          0.9704343128283125,
+          0.8732056334200404,
+          -1.1673443496579983,
+          -0.6505204568239904,
+          5.567888273094596,
+          0.3793927623197154,
+          2.3649767212080945,
+          -0.04532448205762301,
+          1.137794795136338
+        ],
+        "bias": -2.589660034604502
+      },
+      {
+        "weights": [
+          1.9809020800064723,
+          -1.387914247456931,
+          2.791058278229233,
+          0.34291875843695785,
+          -0.7968607634564709,
+          -1.8459889900302375,
+          1.7924870564342439,
+          -0.3566361962388659,
+          1.8117977680096309
+        ],
+        "bias": -2.7263315700061863
+      },
+      {
+        "weights": [
+          -0.20299761355591522,
+          0.13838847103781174,
+          7.218552057221979,
+          -0.09089481002679811,
+          3.711063584176256,
+          -0.05660288634961118,
+          -3.189179206199314,
+          0.07874547662406027,
+          -0.3393221267881401
+        ],
+        "bias": -3.138925926668245
+      },
+      {
+        "weights": [
+          -1.8328957144392728,
+          -1.471281285489319,
+          2.979513209746171,
+          2.299085165965907,
+          1.6238208090837416,
+          2.590948420265533,
+          2.6493176058537924,
+          -1.32728272050044,
+          -0.9390013008039605
+        ],
+        "bias": -4.817295436162141
+      },
+      {
+        "weights": [
+          -0.19929385374756128,
+          1.0354806411151143,
+          1.6003769060102297,
+          -1.0690680428755932,
+          3.876646906794084,
+          1.3808930271016662,
+          -3.700468287616254,
+          -1.8548112364596772,
+          -0.36965278135259816
+        ],
+        "bias": -3.391578631606532
+      },
+      {
+        "weights": [
+          0.3643296905495664,
+          0.3348278984173696,
+          0.5488353914487256,
+          -10.515399065965886,
+          0.6349417011363945,
+          0.50670899184265,
+          2.8652838320286946,
+          2.701954674635309,
+          3.106392253752461
+        ],
+        "bias": -4.316741825170891
+      },
+      {
+        "weights": [
+          0.8442288186700949,
+          -0.4705344124898083,
+          5.253828075120988,
+          -1.1840164640856863,
+          -0.43907466602309647,
+          4.258161539100961,
+          0.6071936252854798,
+          1.6266499984023957,
+          4.437150810379099
+        ],
+        "bias": -6.83277849027713
+      },
+      {
+        "weights": [
+          -0.5937022933632536,
+          -0.2842188258642941,
+          2.8303239974936303,
+          -0.1220690728816722,
+          3.7514609708108275,
+          -0.6528726944490596,
+          2.7178934622268605,
+          -0.8773894935118286,
+          -0.3994586295148561
+        ],
+        "bias": -5.847050843760096
+      },
+      {
+        "weights": [
+          2.603770201715031,
+          0.46003924224063036,
+          3.4560036609865334,
+          -0.10850125236731889,
+          2.7468838732961864,
+          2.5144701992915697,
+          -3.089431411356167,
+          -3.0824975353184434,
+          2.2512462758080494
+        ],
+        "bias": -5.071236077376281
+      },
+      {
+        "weights": [
+          -0.14687816085287325,
+          -1.5001934398662908,
+          -3.5383448942763396,
+          1.2428748835770846,
+          4.3034800689543165,
+          -1.625400563216504,
+          1.5936890781828676,
+          1.0893056148444675,
+          0.08351695743706976
+        ],
+        "bias": -3.308640923259282
+      },
+      {
+        "weights": [
+          -11.945128840004152,
+          0.4127515469747826,
+          0.7285939270908202,
+          0.4981666105684214,
+          0.7589894696947349,
+          1.4856358834261363,
+          2.229201821991373,
+          2.716630424874152,
+          2.5790092583175777
+        ],
+        "bias": -4.980989963570371
+      },
+      {
+        "weights": [
+          3.972914493610719,
+          -0.021519460695329014,
+          -0.10586960930610315,
+          -0.0843273908672866,
+          -6.593316420327985,
+          -0.21546250458068436,
+          -0.1991874562534084,
+          -0.014867665644066802,
+          3.9507562068996136
+        ],
+        "bias": -5.149934935128519
+      },
+      {
+        "weights": [
+          4.545416939709912,
+          1.090579482700871,
+          -1.873506819264501,
+          1.1428387708926804,
+          1.4470992441932637,
+          0.36083504229840335,
+          -1.074760145839126,
+          -0.12627424395364237,
+          -1.2023206665298296
+        ],
+        "bias": -2.625605892010932
+      },
+      {
+        "weights": [
+          0.988304881367708,
+          0.6558034994424656,
+          1.3343469957511287,
+          3.248953558949384,
+          2.3083485861702515,
+          3.0189594702781664,
+          0.7054779283283361,
+          -11.44637457700313,
+          0.853366785819038
+        ],
+        "bias": -4.786733054218915
+      },
+      {
+        "weights": [
+          6.986094968017067,
+          7.954161793833807,
+          6.969265713058814,
+          1.239396227665394,
+          0.5718990702075124,
+          1.2214611936008368,
+          0.7896858142128018,
+          0.39189925731927844,
+          0.45302630501220664
+        ],
+        "bias": -9.632230361815925
+      },
+      {
+        "weights": [
+          -3.0671967505650612,
+          -1.3526005698618484,
+          -3.087611823575231,
+          1.385587722001503,
+          0.19633136089632647,
+          -1.5078361977453765,
+          1.2124457614050808,
+          0.6496507525549492,
+          -3.7142494977622986
+        ],
+        "bias": -3.470843553458981
+      },
+      {
+        "weights": [
+          0.6553751961828449,
+          8.79765588126573,
+          0.3243777879578431,
+          1.027792381343539,
+          -0.47868012527668824,
+          -0.2923112790978266,
+          -0.030780408291452815,
+          0.7511947838392659,
+          0.09258526473821171
+        ],
+        "bias": -4.528008065644693
+      },
+      {
+        "weights": [
+          5.627757877693705,
+          -0.197143300057082,
+          0.48447212916960464,
+          6.1143186182298495,
+          1.5637551808773122,
+          0.5475068155018943,
+          5.868058921183133,
+          -0.024383171251231673,
+          0.6199264212811659
+        ],
+        "bias": -8.449916497959796
+      },
+      {
+        "weights": [
+          0.27516053786371053,
+          0.6547815838788437,
+          6.461249308805444,
+          0.09629918768064383,
+          0.43859504117849385,
+          7.3427367113928375,
+          1.1550214500418683,
+          0.6006580259299495,
+          6.955799371827709
+        ],
+        "bias": -9.357178720144436
+      },
+      {
+        "weights": [
+          0.8668898373844003,
+          3.379321418469199,
+          -2.5085234598112076,
+          0.7667949891930042,
+          -3.1316044223599957,
+          -2.7951900632102817,
+          0.7870705761528789,
+          3.5517196582242336,
+          -2.6774650823804054
+        ],
+        "bias": -3.330318624300206
+      },
+      {
+        "weights": [
+          -4.04058602266944,
+          -4.479246437678795,
+          0.37755070684321146,
+          1.031704314101042,
+          -2.9715737727811273,
+          0.9632575187957968,
+          1.558990998363143,
+          -2.5271923817113455,
+          -1.52616476983103
+        ],
+        "bias": -4.889051363365273
+      },
+      {
+        "weights": [
+          -0.583065230444245,
+          3.407589184931306,
+          -0.014939198996317406,
+          -0.8665944845351052,
+          -1.3315827163625897,
+          -0.9097023829337212,
+          -4.436408110912911,
+          -2.1671061119157145,
+          -4.060253878261942
+        ],
+        "bias": -3.3888278209112297
+      },
+      {
+        "weights": [
+          2.2752261290411218,
+          -1.585171194248444,
+          2.2196974068415645,
+          -1.742813308340669,
+          -1.9307548219533255,
+          -0.2270162963630696,
+          2.0088769149318186,
+          -0.7598004227014542,
+          1.5578906220038573
+        ],
+        "bias": -3.3778098304255773
+      },
+      {
+        "weights": [
+          1.9028807625817645,
+          -1.8559587658775625,
+          -1.7813128375713123,
+          0.5221916975824834,
+          -2.0785672920278833,
+          0.9912362060202846,
+          -3.439011851311875,
+          -3.8746101326170677,
+          -0.30128767183632055
+        ],
+        "bias": -3.294175979963282
+      },
+      {
+        "weights": [
+          1.9603286400465398,
+          1.911983048587713,
+          1.9570232339596731,
+          1.5337630992108935,
+          1.9558143687237162,
+          2.778310537960543,
+          -10.287700012985383,
+          1.050436314208953,
+          1.7723185297272892
+        ],
+        "bias": -3.6415244504837836
+      },
+      {
+        "weights": [
+          -3.9301660165251167,
+          -1.2818831570055895,
+          -0.22772313942717184,
+          -1.6747115849993093,
+          4.892473239319839,
+          0.7013706802904703,
+          0.057773389215165824,
+          1.289899073290375,
+          1.5179683274359006
+        ],
+        "bias": -3.6155563900297008
+      },
+      {
+        "weights": [
+          2.6678091469636844,
+          3.0914517477065986,
+          3.8942455940057235,
+          -2.1995264805499612,
+          3.83583323756358,
+          -1.1228291067428202,
+          -0.6274379201343213,
+          0.36914813706860505,
+          -0.7035213146808291
+        ],
+        "bias": -3.7497391799856383
+      },
+      {
+        "weights": [
+          1.0337431857336665,
+          0.5496937610923006,
+          -0.6869984330616705,
+          3.9505553486335443,
+          -5.064732921280912,
+          3.7312990922056186,
+          -0.6166239239213046,
+          -0.8458602729768135,
+          -1.5704359635721572
+        ],
+        "bias": -3.337524302054967
+      },
+      {
+        "weights": [
+          0.3599489720043895,
+          0.43236709086762426,
+          -5.120188031519675,
+          0.3186870056496756,
+          8.469113123049697,
+          0.31158846673917356,
+          8.656936027376418,
+          0.24885495335903196,
+          0.5936758280603802
+        ],
+        "bias": -5.839565018859717
+      },
+      {
+        "weights": [
+          -0.1913086789265158,
+          1.1774332182487504,
+          1.750583861077758,
+          0.04795331518602518,
+          3.6977324709507857,
+          -0.3284256758292992,
+          -0.7451085962563234,
+          0.261668029976939,
+          1.917700589611919
+        ],
+        "bias": -3.2293583512108643
+      },
+      {
+        "weights": [
+          -1.4298821788010974,
+          -1.5446912451011017,
+          -1.7946532506835147,
+          6.550153148683202,
+          -0.42328255860811503,
+          -1.996807157018262,
+          -0.9909595870418847,
+          -1.8418216119007451,
+          -1.0173945479423347
+        ],
+        "bias": -5.869386859258259
+      },
+      {
+        "weights": [
+          0.6892827720644111,
+          1.223043151013456,
+          0.8606664343415883,
+          1.792413206297387,
+          1.8221597815902024,
+          1.7297983023962133,
+          -0.119547707515389,
+          1.2936602607068488,
+          9.71779815256113
+        ],
+        "bias": -3.9416674579474997
+      },
+      {
+        "weights": [
+          -3.7738473567193744,
+          0.5006923196722197,
+          1.5229466917922152,
+          -3.6617997330005774,
+          -2.3498779311332196,
+          -1.7739113439723118,
+          -0.8036505279017253,
+          0.496419606774108,
+          -1.2769478929287048
+        ],
+        "bias": -3.5293225362972347
+      },
+      {
+        "weights": [
+          0.8172619928266862,
+          0.5667899868802092,
+          2.5737505738054915,
+          1.430889378410483,
+          0.668328413945868,
+          0.3062180453829011,
+          1.0313434129677568,
+          0.21329609996464174,
+          -7.532740925729528
+        ],
+        "bias": -4.506935461257624
+      },
+      {
+        "weights": [
+          0.20472269650921926,
+          2.4220781786705508,
+          -0.4454610676472948,
+          -3.890155519895129,
+          -1.235235714763471,
+          -3.9431922900582097,
+          -1.214117173916185,
+          2.141036199219648,
+          -1.078614592191289
+        ],
+        "bias": -3.570779620129348
+      },
+      {
+        "weights": [
+          0.6173221502858878,
+          2.237502829823483,
+          1.6055233739035801,
+          1.9982017580204714,
+          -1.4281339292282342,
+          2.4829258336522004,
+          1.988335452646913,
+          2.8123143401411874,
+          2.876187749582666
+        ],
+        "bias": -1.8223488605669245
+      },
+      {
+        "weights": [
+          4.1979545404428515,
+          -1.056624475687967,
+          1.674149499716116,
+          3.054216161082719,
+          4.285532622206669,
+          -0.2989876485493775,
+          1.5336090905828113,
+          -2.6487414523026804,
+          -2.151233159566216
+        ],
+        "bias": -4.960537586639343
+      },
+      {
+        "weights": [
+          2.236760458987788,
+          -3.8109436333911866,
+          -1.0429034868536111,
+          2.4276748947802056,
+          4.5733574029731106,
+          0.43982157837891717,
+          3.8810858784707523,
+          -3.231960671665602,
+          0.9241403631061024
+        ],
+        "bias": -5.0617815717068035
+      },
+      {
+        "weights": [
+          -2.4819723626318466,
+          -2.2754463100981606,
+          -2.655879658289854,
+          0.49239252084658997,
+          0.020854542194866967,
+          0.8888279117009827,
+          -2.9738934153643237,
+          1.2576849452961791,
+          -2.9738725107734187
+        ],
+        "bias": -3.1299541191115425
+      },
+      {
+        "weights": [
+          -6.22054342502992,
+          3.0253720791685264,
+          3.304514040550392,
+          1.8814935933527235,
+          1.7576345902380397,
+          -0.08037508399909171,
+          1.5399475555492934,
+          -0.29222365849065396,
+          1.9259609959821566
+        ],
+        "bias": -3.199499609433332
+      },
+      {
+        "weights": [
+          1.7227711153527643,
+          1.1719142830247482,
+          -0.001446777211514589,
+          1.2737440359402625,
+          4.80523352831998,
+          -1.5292475545975264,
+          -0.20928319826515263,
+          -1.4182002354651766,
+          -3.8959999387914777
+        ],
+        "bias": -3.3739186139911923
+      },
+      {
+        "weights": [
+          -2.6768398794989348,
+          0.6622828830235303,
+          1.0226493408386224,
+          -0.9011447165245283,
+          -5.144461016135202,
+          -1.4334123718435072,
+          0.14590092264840604,
+          0.3265787331069968,
+          -1.963218290693824
+        ],
+        "bias": -4.206019551423796
+      },
+      {
+        "weights": [
+          0.7834799621785843,
+          -9.805981929901744,
+          0.25262863581144906,
+          0.456744782813326,
+          0.08363805570725322,
+          0.255642316255897,
+          3.301136701365836,
+          2.692459239670924,
+          2.847714830129242
+        ],
+        "bias": -5.178042592587704
+      },
+      {
+        "weights": [
+          -2.146603930439854,
+          -2.318726652992532,
+          -1.784085078971833,
+          -2.507791977489105,
+          -1.4270506679351445,
+          -2.281107060913036,
+          -2.378421380334378,
+          5.202928250460585,
+          -2.0779992915585694
+        ],
+        "bias": -6.035898194565659
+      },
+      {
+        "weights": [
+          -1.0599474403936002,
+          0.6305959980211902,
+          0.6925170450916266,
+          -0.819652162819517,
+          0.4372900587339532,
+          0.47161880546743473,
+          1.7523193794466025,
+          1.9879130829393927,
+          -1.4526671048500306
+        ],
+        "bias": -4.592024175179631
+      },
+      {
+        "weights": [
+          -4.44089157882807,
+          -1.3032385434284963,
+          -3.855872408150912,
+          -1.2302474693462597,
+          -2.374616933405217,
+          0.41377568729030356,
+          -4.346714223668423,
+          0.41950470370832654,
+          -2.056009584212301
+        ],
+        "bias": -3.156513603917455
+      },
+      {
+        "weights": [
+          2.283025156508841,
+          0.5777366709532852,
+          -0.9672441143317895,
+          -3.5672583053796623,
+          0.11297605175056002,
+          -3.2173291096713172,
+          2.318884737460947,
+          0.6544637764164392,
+          -0.3009989334659093
+        ],
+        "bias": -5.242946266032568
+      },
+      {
+        "weights": [
+          0.5454659878271669,
+          6.030605613910579,
+          -0.2655527998744632,
+          -0.15174550176839235,
+          6.875772193609593,
+          0.10254621697488633,
+          -0.5657171759238823,
+          7.405263554873068,
+          0.2444796324948255
+        ],
+        "bias": -10.595716475966288
+      },
+      {
+        "weights": [
+          0.1495966320250742,
+          -0.3034046715120587,
+          0.006825460380174851,
+          -0.20449075055954907,
+          0.6983700582500018,
+          -0.6415508920913475,
+          4.778200976371306,
+          4.171225683202341,
+          4.50567012095462
+        ],
+        "bias": -7.223794933912704
+      },
+      {
+        "weights": [
+          0.44673563043250314,
+          -0.6544095775500411,
+          -2.8118198367763636,
+          1.2672843774110967,
+          -1.291843204535739,
+          2.7567787685016443,
+          0.9956377426985793,
+          -1.1099732863458114,
+          -3.086424325243461
+        ],
+        "bias": -3.50799837300794
+      },
+      {
+        "weights": [
+          1.4539561555612508,
+          0.8985028025604896,
+          -11.892907298519491,
+          1.909677370690118,
+          1.071181522625545,
+          1.043072668121401,
+          2.868685355120323,
+          3.094608510646576,
+          2.390587246385425
+        ],
+        "bias": -4.561525641781025
+      },
+      {
+        "weights": [
+          2.165263184941076,
+          0.5691320960433912,
+          0.23365430720814653,
+          -1.8466671686714053,
+          0.5880043979319385,
+          2.2368740205012947,
+          2.0731958322508484,
+          1.0885291331703655,
+          -0.9795930681682224
+        ],
+        "bias": -2.788316533401637
+      },
+      {
+        "weights": [
+          -0.7911248946831089,
+          4.342643427030867,
+          -1.1586628891608746,
+          -2.256472987523387,
+          -1.6417248520120646,
+          -1.62424853811749,
+          -2.4052618950627185,
+          -0.6296887217378122,
+          -2.2226109256716455
+        ],
+        "bias": -7.163067079171148
+      },
+      {
+        "weights": [
+          -2.179930680420734,
+          -1.7882382558460916,
+          -2.9961264085454498,
+          -1.37257659727328,
+          1.6118341406940138,
+          1.770463197296476,
+          -3.627777941857709,
+          1.0867562841755052,
+          2.170665130861442
+        ],
+        "bias": -4.8472929647888945
+      },
+      {
+        "weights": [
+          -0.4815412027249852,
+          1.1456401081895953,
+          -1.0025997059927478,
+          -1.940074283456989,
+          4.388670357111777,
+          -1.97962499944007,
+          2.764564645787836,
+          3.289593157587314,
+          3.4309594811566293
+        ],
+        "bias": -4.066063326400202
+      },
+      {
+        "weights": [
+          -0.6652279644626671,
+          0.5664877944385386,
+          -1.142578881794076,
+          0.36052806716170893,
+          0.7758596295656172,
+          0.4944949237982765,
+          2.6547088863791157,
+          -4.370554808914356,
+          2.3746946783696816
+        ],
+        "bias": -3.6341331063913196
+      },
+      {
+        "weights": [
+          5.3777151295665755,
+          -0.06845483274804388,
+          -0.41130454145381423,
+          -0.8286233463502508,
+          6.144592281407607,
+          -0.04283711084440296,
+          -1.2118272184277343,
+          -0.6227318228592409,
+          5.889995460148145
+        ],
+        "bias": -10.738333284451263
+      },
+      {
+        "weights": [
+          0.6174669534528544,
+          0.42684014820268973,
+          0.8184193345838972,
+          0.2196794624310411,
+          -13.557059719345975,
+          0.13418118100733673,
+          2.158787247614964,
+          2.498748807570318,
+          1.9406575629384872
+        ],
+        "bias": -5.480842630322396
+      },
+      {
+        "weights": [
+          4.563185239872199,
+          1.3642577123955806,
+          1.043000141086965,
+          5.647748854120724,
+          -0.04173354961410092,
+          -0.4162143468266369,
+          4.6148616976359405,
+          1.0681782807783848,
+          1.2328982537856839
+        ],
+        "bias": -6.4375927000929
+      },
+      {
+        "weights": [
+          -0.246316202220445,
+          0.8412630826669358,
+          0.601243057484851,
+          5.820827792744894,
+          6.601204205832103,
+          6.426894374673789,
+          -0.7126142009717077,
+          0.7790339856108632,
+          0.6036349719598046
+        ],
+        "bias": -9.697170770643691
+      },
+      {
+        "weights": [
+          3.6596547170717333,
+          0.35530523604504344,
+          3.0458998626462135,
+          1.5158749895054757,
+          4.576201540537449,
+          2.3380728402150694,
+          1.2177177414726998,
+          1.4753468962628526,
+          1.6364313357704041
+        ],
+        "bias": -2.6342740782372087
+      }
+    ],
+    [
+      {
+        "weights": [
+          -1.5682310825283148,
+          2.6295972304651087,
+          3.3731008672217078,
+          -2.17251830357794,
+          -1.4470901927409041,
+          2.004144379610319,
+          -3.0711682505767435,
+          -0.36329635167779206,
+          0.06663977868398721,
+          -0.42511246760509264,
+          -0.1335483847242933,
+          0.19474685302911732,
+          -0.2406968542941816,
+          -19.952852187496372,
+          -6.193446340810227,
+          -4.581996743622856,
+          0.4143351358356062,
+          5.25186885831278,
+          0.3535877774875369,
+          1.4058141433351452,
+          3.6423338236484235,
+          -4.947426499932315,
+          -3.863986935132053,
+          0.6907836931280398,
+          -0.4124369011914654,
+          -5.599819616621929,
+          -5.36508523837339,
+          -1.0339414752044989,
+          4.914098939536349,
+          -0.1897886411122312,
+          -2.001163878068714,
+          2.6539489695688094,
+          4.466492463621867,
+          3.0293419215746553,
+          2.3809614833390267,
+          2.8263116861206403,
+          0.8988815345596386,
+          -2.7178183660550537,
+          -1.0596194804962908,
+          -3.2212454320904715,
+          0.8828813246379061,
+          -0.6162727598742562,
+          2.866471550162836,
+          -2.018646066494563,
+          3.390864456775543,
+          -0.36542519711860466,
+          0.5137873885429578,
+          1.7090950943864438,
+          2.1222397918718445,
+          -3.131993704318315,
+          -4.256147271671437,
+          -1.883449367541319,
+          0.5070527371963958,
+          1.2616514308412468,
+          -4.265896809482669,
+          1.3188578583655632,
+          -0.23775454632800333,
+          -1.567519619483015,
+          -0.9533475966410198,
+          6.747456123760388,
+          5.076969543383824,
+          1.0153167013784883,
+          -4.923788707599482,
+          -3.9802590457677214
+        ],
+        "bias": 2.4445675673269074
+      },
+      {
+        "weights": [
+          -1.207996848240705,
+          2.9557970079791627,
+          2.0153412320198942,
+          0.4240751546380135,
+          2.775124852772289,
+          -0.4671808768231407,
+          -4.22489619639441,
+          -1.539856170982045,
+          0.36283915105178927,
+          -3.1875740642861543,
+          -2.49817704161659,
+          -2.5399065708864836,
+          2.7400655845275224,
+          4.328938894485849,
+          -1.1562285794330913,
+          -0.8863233960463449,
+          0.7679725503319973,
+          8.451217103753178,
+          -1.4481247564897046,
+          -11.695874877929977,
+          -3.7307729965039,
+          -4.648764051019919,
+          -3.5503157738625886,
+          0.21318183013250022,
+          0.9615359026977562,
+          1.8483739640503494,
+          0.07466130284280177,
+          0.7201623098682153,
+          1.7874159575744268,
+          2.5589840786424034,
+          -3.032340015545281,
+          0.6000845340648507,
+          1.022547826759684,
+          2.409513877330907,
+          -0.6237933131266341,
+          -5.267651033508124,
+          2.267826430813569,
+          -0.5996287936755812,
+          -1.519934028086014,
+          -4.285861236153975,
+          -4.035309039655337,
+          -2.125118963491015,
+          -2.0461852964982037,
+          0.9917302141191726,
+          0.26411190530343986,
+          -12.077114801489087,
+          5.8896989175661405,
+          0.6971859503817465,
+          -2.0624616298567133,
+          -1.076847180356053,
+          5.243192485748884,
+          -2.5114300432932684,
+          -0.7058147214878023,
+          2.649503726747107,
+          -3.2452599502745603,
+          -6.652782700608198,
+          -2.198357772305103,
+          -1.9131821033457885,
+          0.1965618772953359,
+          -3.79620529483926,
+          5.000961599167161,
+          -2.481521362564601,
+          -7.657653106115735,
+          2.4645231498827296
+        ],
+        "bias": -0.216908705219532
+      },
+      {
+        "weights": [
+          0.3910547761930686,
+          3.00395115376579,
+          3.877220781770804,
+          5.3488513498997134,
+          -7.707278470553483,
+          -11.332722259005813,
+          1.2075785920122384,
+          -1.8871737790584457,
+          0.24829104187032916,
+          -4.702889905100497,
+          1.7513235542588756,
+          -0.9261280295365886,
+          4.08656890026305,
+          4.234097505714858,
+          0.16868568835471126,
+          3.4201741916959403,
+          -1.1407720472901535,
+          4.8469077720966895,
+          1.2059916880596786,
+          -0.3470451930221451,
+          -5.09801038537161,
+          6.820003598016473,
+          -0.32462933421544676,
+          -3.6650234478995842,
+          -0.5434523138070673,
+          -2.8049724971710828,
+          0.501562933835374,
+          2.6153653742327347,
+          0.7569973697782101,
+          0.5387809729853199,
+          -2.030077804357605,
+          -1.4510394206955755,
+          0.7482035010532438,
+          0.6398479161272371,
+          3.409220985343137,
+          -6.717073877708815,
+          -0.7921956343407873,
+          -1.1084562812552716,
+          -1.9241294215886715,
+          -0.7136470352132087,
+          -0.2923113225560167,
+          -0.638660427821087,
+          -4.568185826016466,
+          2.062914933272513,
+          -1.1601130779515922,
+          0.983298694961693,
+          1.308802824975662,
+          2.2886049967471918,
+          0.6248488041915486,
+          1.429422140511695,
+          -5.0190340975115015,
+          -3.5013061726686794,
+          -5.127725354102717,
+          -18.84304198866994,
+          -1.599030382915259,
+          4.291641160718504,
+          -0.2247362909791154,
+          -1.8877059980452875,
+          0.6324076578882359,
+          -3.3325692033246703,
+          5.027260043636564,
+          -1.249977978505036,
+          -4.890777431409735,
+          -0.40861943426723263
+        ],
+        "bias": 2.6127111097203057
+      },
+      {
+        "weights": [
+          0.6096327214930575,
+          2.539692085812347,
+          1.0843380973948504,
+          -1.6643961549841058,
+          -0.159181041544789,
+          -0.39202341777969496,
+          1.3417677073685157,
+          4.508212602846085,
+          -11.860971880420744,
+          -2.5367466107524783,
+          -2.825376452370437,
+          -2.031129657575705,
+          -0.6770927172805656,
+          5.413357282180702,
+          -1.5566155725244784,
+          0.43048093945645,
+          1.479022661799997,
+          -6.479077058126402,
+          -3.2087456041685534,
+          1.9033943531352526,
+          5.425419570038677,
+          -4.113302720759948,
+          -3.2419409377622217,
+          -5.027064661060958,
+          -2.5057226870071823,
+          2.7810403116827556,
+          -2.609527848600763,
+          2.055014642309848,
+          3.0362734986399142,
+          -3.1955400960174094,
+          -2.8324269920800003,
+          2.959237247113486,
+          -0.6393928407241539,
+          -12.741228303283885,
+          3.2788999073204947,
+          0.47957032682652384,
+          -1.2213401305636216,
+          2.1313745563705386,
+          -4.747765026562445,
+          -0.5897869958281761,
+          0.5378915767159167,
+          1.2652024007127323,
+          -4.4251408308065034,
+          1.1311094983995473,
+          3.5625868065269195,
+          -0.22907473091216046,
+          1.989587174677107,
+          -0.406109089593576,
+          -2.255021316070014,
+          0.20339868394525257,
+          -7.435232271593633,
+          -1.1872297138650265,
+          1.6257365324931754,
+          1.6392818517517096,
+          2.0591626123082034,
+          1.4919939064016725,
+          -2.79917976199582,
+          -3.003136027576417,
+          -2.785354270170397,
+          -4.084779239052012,
+          4.3670909645726335,
+          4.143920351640489,
+          5.667499320126809,
+          0.2029378474240436
+        ],
+        "bias": -1.1802360221583512
+      },
+      {
+        "weights": [
+          -0.017854279699980106,
+          1.943250817879938,
+          4.479529553069638,
+          -2.4609342057316277,
+          2.074404442583277,
+          -2.469758381505083,
+          2.118750606049907,
+          -4.958255416660967,
+          1.3372209378670312,
+          -1.4934944410243878,
+          4.873747705199996,
+          -1.5355100035502582,
+          -6.552850941416338,
+          4.6254275774577325,
+          2.6047670738601596,
+          -0.06638787968302613,
+          2.8268287831001815,
+          -3.4187181252677834,
+          -1.9168609121445868,
+          1.9173176644122603,
+          -0.853829170864131,
+          -2.8426495453346403,
+          2.520476873989726,
+          -0.6582220523768458,
+          -3.6555133132085773,
+          1.988934648778315,
+          -0.04545988597248614,
+          3.704009917161565,
+          -6.027007203102216,
+          1.7142190338707382,
+          1.369888297221824,
+          -4.924628933583534,
+          -1.8185383509326338,
+          1.6150507046874296,
+          0.7542538135900814,
+          0.11349401306060779,
+          2.7441307056383404,
+          -1.468023373152739,
+          -0.651350743795862,
+          -0.048134155071159215,
+          0.43592971785782847,
+          0.9936526016258151,
+          -3.10484974435798,
+          -6.242350188334135,
+          4.172807783831938,
+          -0.04316189203369297,
+          0.17345134149807548,
+          2.7025851406291896,
+          -1.416315796082872,
+          -0.33506318528847007,
+          3.8476471854021645,
+          0.7171135952635861,
+          -0.5705948666044195,
+          4.106600290984069,
+          -2.359094433783554,
+          1.6638476072292776,
+          -1.4679722875481447,
+          1.5620908258449329,
+          -2.7499004175958506,
+          3.781238404016156,
+          -20.073701953822543,
+          -3.3894050486282215,
+          3.8634582718476764,
+          -1.7597893598926666
+        ],
+        "bias": 1.7374359484292083
+      },
+      {
+        "weights": [
+          -15.16463148657197,
+          -12.499319147649354,
+          -1.411826828055669,
+          -1.8677136347740362,
+          3.780825638902347,
+          0.40327960288242254,
+          2.2799338667954556,
+          1.9567328169663545,
+          0.13530826257044787,
+          -1.0957148390155387,
+          -2.4237513474053034,
+          -1.5613555467112532,
+          2.5422532350928235,
+          2.296669657076463,
+          -1.3187940146461274,
+          -0.4805458783850551,
+          2.50319399179296,
+          -6.308109993642106,
+          -1.1259836616088492,
+          1.048942824203475,
+          -3.065741097278321,
+          8.757121759092259,
+          -0.8549808738709233,
+          -3.8189526975011034,
+          -2.122371819438794,
+          -0.4865964558340786,
+          -3.04678949537035,
+          3.1582291126864983,
+          1.1219053607330438,
+          -4.354906412187372,
+          -4.802598903018811,
+          0.9718509781516234,
+          0.5897035772879947,
+          3.8081571779940413,
+          3.3276371971410494,
+          -1.5914380937111645,
+          -0.7213918324782355,
+          2.65814046827069,
+          -2.8237691953662347,
+          -1.0899475466982305,
+          -2.332418353351001,
+          1.648679768286618,
+          -2.1308159943275213,
+          3.403420512937577,
+          3.291275930748279,
+          1.063595211032097,
+          1.7716972614528181,
+          -0.21894830399005383,
+          -3.879765607269027,
+          1.8851704091671277,
+          -7.46230371103865,
+          0.34812390574454927,
+          3.6362245955346557,
+          2.2155990694090684,
+          0.12115475420085953,
+          1.1621136099956315,
+          -4.239535238584165,
+          -3.0517143127582456,
+          -2.6941724385096784,
+          -3.5731592528604277,
+          4.503568636144059,
+          -4.239953988293634,
+          2.7657402152618054,
+          0.23300176372261983
+        ],
+        "bias": -0.9557530180141699
+      },
+      {
+        "weights": [
+          0.9075091958628014,
+          0.5862432854011641,
+          -9.89166531378739,
+          5.573813160825531,
+          -1.0205333211371788,
+          0.7136160289267703,
+          1.89697182223891,
+          5.190227565743491,
+          2.7376969099946487,
+          -2.363018592871095,
+          2.6493290137256476,
+          -2.616527019844342,
+          -1.7060116936318215,
+          5.110731959447647,
+          -0.18852315206387116,
+          2.4472534301209836,
+          0.6874572450734128,
+          -6.249463317603299,
+          -4.0457011490035395,
+          0.5742545323389558,
+          5.402977741991104,
+          -3.1441610221305045,
+          -3.08942216904616,
+          -4.989542681497217,
+          -0.05454517155200571,
+          -3.9214298620660792,
+          -0.41083452015681104,
+          -16.787618975299335,
+          2.0321298928081926,
+          -0.8919587505813724,
+          -0.32299231275336454,
+          -10.567930903532039,
+          3.116946850236959,
+          1.6288534568226747,
+          0.9858340754303648,
+          -2.747678985889659,
+          1.4955487785016952,
+          -2.9079799120177205,
+          -1.4049994365165612,
+          2.1033368996429216,
+          -1.8158383035514292,
+          -3.4212617600927304,
+          -4.733744221281811,
+          0.4453881315091197,
+          -0.856246572765395,
+          0.2306196891839447,
+          4.628532071192694,
+          -0.3069665548370875,
+          0.7383425231092265,
+          -3.6328022507703728,
+          -4.190451417782198,
+          5.478808095879026,
+          0.9268471658815661,
+          4.197858552645058,
+          -4.58647145814511,
+          1.1256659044034216,
+          -2.6928368269885414,
+          -0.738068829917864,
+          -4.083189039500475,
+          -4.331289583854707,
+          4.613719349074874,
+          -0.20954353339095969,
+          -5.546805166937509,
+          2.7713354351545383
+        ],
+        "bias": 2.3494405157950666
+      },
+      {
+        "weights": [
+          -0.37303944211441,
+          2.733183363645838,
+          3.362877262674278,
+          -1.6522059487341334,
+          0.3537136299989643,
+          -0.5441817717949875,
+          -2.8189803721475375,
+          2.9837372335186974,
+          1.216600876522344,
+          -1.0059696264881774,
+          -2.4443353726504258,
+          -0.8442132559445502,
+          0.0946431969900842,
+          3.186940357769734,
+          -0.8806259945720649,
+          -0.23461541949862574,
+          -13.155703384473927,
+          -7.295927458944807,
+          -4.602698219610014,
+          1.06887378334388,
+          -2.7600180535890426,
+          -5.4064250851133355,
+          -3.6158269793089315,
+          -0.23915656962834647,
+          1.0842404133908965,
+          0.19906420507796108,
+          1.3599704629055531,
+          0.30035743427893785,
+          -1.1532711258095023,
+          -1.4903984089156543,
+          -2.874432631963158,
+          2.1262775550479165,
+          1.083139053258939,
+          2.354823055764406,
+          0.15571545707113568,
+          -3.090061014345334,
+          3.9311741960325235,
+          -0.5114421986417352,
+          -0.35068746640359205,
+          -2.1030199297256384,
+          -5.253451085228396,
+          4.022355539363546,
+          -1.1998729092265348,
+          3.4803004334375283,
+          0.8417895375312077,
+          2.671084887097719,
+          -12.871671030112507,
+          -0.8424809322339024,
+          -3.911489503219136,
+          -0.7008324064838066,
+          5.72734830645928,
+          2.8839671762016397,
+          -1.1888423406155035,
+          2.1220141632969565,
+          -4.184207331562659,
+          3.9773458113981155,
+          -3.7645928577998276,
+          3.2787644075287816,
+          2.3762771331438333,
+          -4.384400059643726,
+          4.552744774041474,
+          -3.4102370351697,
+          -4.323397464773697,
+          0.40045737423399774
+        ],
+        "bias": -2.2437169614791843
+      },
+      {
+        "weights": [
+          2.217165541604442,
+          0.9768142527992673,
+          -0.30731648290737096,
+          -0.7507641554210297,
+          -3.504180776477608,
+          0.74460046289805,
+          -0.8139350297335513,
+          0.7206885558809164,
+          -0.5985998831904804,
+          2.9792023774764917,
+          -1.3577208165961423,
+          1.0942750079149217,
+          0.9012736031392847,
+          6.064576625063452,
+          -6.938197578344205,
+          0.06276205081610654,
+          3.6441029442950277,
+          -5.73218195722848,
+          -1.4534472201710549,
+          -0.671972753226508,
+          -4.297665606802814,
+          4.366838563905997,
+          -0.8442297384833171,
+          -0.6914482160221014,
+          -0.10484712621582544,
+          -1.1349583261523788,
+          -2.1210167563164415,
+          1.952319724087983,
+          -2.8511129917911373,
+          -2.688723941371763,
+          0.7080270424100997,
+          2.2749902414339624,
+          -1.9842948024555114,
+          0.427722849821044,
+          -14.269912785867916,
+          -1.1239013915812683,
+          -10.945898513839284,
+          -4.772584284681814,
+          1.2461324262362758,
+          -2.393721107317046,
+          -2.801647649230396,
+          -4.034052583425431,
+          -4.375043934994283,
+          4.1526797796586905,
+          1.3792155139248867,
+          0.40919520737318554,
+          1.4983967153779216,
+          1.040412120388008,
+          -2.1661298942625917,
+          3.7301584574971947,
+          -4.661881522230332,
+          4.732921553000946,
+          -3.7457137524058646,
+          3.3025652248817403,
+          0.05852194467792263,
+          1.0591788607512684,
+          -1.5841307637844129,
+          -1.3976575246790979,
+          -4.560696698700525,
+          5.07568932715246,
+          5.037068543158899,
+          -1.6878606314055014,
+          -3.170487141294219,
+          4.4395671351096455
+        ],
+        "bias": 2.569571111490171
+      }
+    ]
+  ]
+};
+
+const SEGMENTE = "abcdefg";
+const BIT_NAMEN = [8, 4, 2, 1];
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+// ---------------------------------------------------------------------
+// Das neuronale Netz: nur Forward-Pass, genau wie in C (Part 4/5)
+// ---------------------------------------------------------------------
+function sigmoid(z) {
+  return 1 / (1 + Math.exp(-z));
+}
+
+// Pro Layer: jedes Neuron rechnet sigmoid(bias + Summe(w_j * x_j)).
+// Die Ausgaben eines Layers sind die Eingaben des nächsten.
+// Rückgabe: ALLE Aktivierungen [Eingabe, Layer 1, Layer 2] - die brauchen wir fürs Netzdiagramm.
+function vorwaerts(netz, eingabe) {
+  const alle = [eingabe];
+  let x = eingabe;
+  for (const layer of netz.layers) {
+    x = layer.map(n => sigmoid(n.bias + n.weights.reduce((summe, w, j) => summe + w * x[j], 0)));
+    alle.push(x);
+  }
+  return alle;
+}
+
+// Nur die Ausgabe des letzten Layers
+function predict(netz, eingabe) {
+  const alle = vorwaerts(netz, eingabe);
+  return alle[alle.length - 1];
+}
+
+// ---------------------------------------------------------------------
+// Hilfen
+// ---------------------------------------------------------------------
+function svgElement(typ, attribute, eltern) {
+  const el = document.createElementNS(SVG_NS, typ);
+  for (const [k, v] of Object.entries(attribute)) el.setAttribute(k, v);
+  eltern.appendChild(el);
+  return el;
+}
+
+// Mischt zwei RGB-Farben: a = 0 -> farbe0, a = 1 -> farbe1
+function mische(farbe0, farbe1, a) {
+  const t = Math.min(1, Math.max(0, a));
+  return `rgb(${farbe0.map((v, i) => Math.round(v + (farbe1[i] - v) * t)).join(", ")})`;
+}
+
+// ---------------------------------------------------------------------
+// 7-Segment-Anzeige in der Seitenleiste
+// ---------------------------------------------------------------------
+// Ein Segment als Sechseck mit spitzen Enden. (x, y) = Start der Mittellinie.
+const L = 120, T = 22, OX = 40, OY = 30;
+function segmentPunkte(x, y, horizontal) {
+  const h = T / 2, lu = 3;   // lu: kleine Lücke, damit sich Segmente an den Ecken nicht berühren
+  if (horizontal) {
+    const x1 = x + lu, x2 = x + L - lu;
+    return [[x1, y], [x1 + h, y - h], [x2 - h, y - h], [x2, y], [x2 - h, y + h], [x1 + h, y + h]];
+  }
+  const y1 = y + lu, y2 = y + L - lu;
+  return [[x, y1], [x + h, y1 + h], [x + h, y2 - h], [x, y2], [x - h, y2 - h], [x - h, y1 + h]];
+}
+
+//      aaa
+//     f   b
+//      ggg
+//     e   c
+//      ddd
+const POSITION = {
+  a: [OX, OY, true],          b: [OX + L, OY, false],
+  c: [OX + L, OY + L, false], d: [OX, OY + 2 * L, true],
+  e: [OX, OY + L, false],     f: [OX, OY, false],
+  g: [OX, OY + L, true],
+};
+
+// ---------------------------------------------------------------------
+// Netzdiagramm 4 -> 16 -> 7: füllt den ganzen Platz rechts
+// ---------------------------------------------------------------------
+const GROESSEN = [NETZ.layers[0][0].weights.length, ...NETZ.layers.map(layer => layer.length)];
+const LAYER_NAMEN = ["Eingabe · 4 Bits", "Hidden · 16 Neuronen", "Ausgabe · 7 Segmente"];
+let netzLinien = [], netzKugeln = [], eingabeTexte = [], ausgabeTexte = [];
+let letzteAkt = null, radius = 12;
+let fokus = null;          // Neuron unter der Maus als [layer, index], sonst null
+let letzteGroesse = "";   // damit nur bei echter Größenänderung neu gebaut wird
+
+// Positionen aller Kugeln, passend zur aktuellen Größe der Fläche
+function layout(breite, hoehe) {
+  const links = 140, rechts = 210, oben = 90, unten = 50;
+  const r = Math.max(9, Math.min(18, (hoehe - oben - unten) / Math.max(...GROESSEN) / 2.8));
+  const pos = GROESSEN.map((n, l) => {
+    const x = links + l * (breite - links - rechts) / (GROESSEN.length - 1);
+    const abstand = Math.min(r * 6, (hoehe - oben - unten) / n);
+    const start = oben + (hoehe - oben - unten) / 2 - abstand * (n - 1) / 2;
+    return Array.from({ length: n }, (_, i) => [x, start + i * abstand]);
+  });
+  return { pos, r };
+}
+
+// Baut das Diagramm neu auf - beim Start und immer, wenn sich die Fenstergröße ändert
+function netzAufbauen() {
+  const svg = document.getElementById("netzbild");
+  const { width: breite, height: hoehe } = svg.getBoundingClientRect();
+  if (breite < 50 || hoehe < 50 || `${breite}x${hoehe}` === letzteGroesse) return;
+  letzteGroesse = `${breite}x${hoehe}`;
+  svg.setAttribute("viewBox", `0 0 ${breite} ${hoehe}`);
+  [...svg.querySelectorAll(":scope > :not(defs)")].forEach(el => el.remove());
+
+  const layoutDaten = layout(breite, hoehe);
+  const pos = layoutDaten.pos;
+  radius = layoutDaten.r;
+  const schrift = Math.max(13, Math.min(17, radius * 0.9));
+
+  // Überschriften der Layer
+  pos.forEach((layer, l) => {
+    svgElement("text", { x: layer[0][0], y: 42, "text-anchor": "middle", fill: "#8b91a3", "font-size": 12, "letter-spacing": "0.08em" }, svg)
+      .textContent = LAYER_NAMEN[l].toUpperCase();
+  });
+
+  // Linien zuerst (liegen hinter den Kugeln). netzLinien[l][i][j]: von Neuron j (Layer l) zu Neuron i (Layer l+1)
+  netzLinien = NETZ.layers.map((layer, l) => pos[l + 1].map(([x2, y2]) => pos[l].map(([x1, y1]) =>
+    svgElement("line", { x1, y1, x2, y2, "stroke-linecap": "round" }, svg))));
+
+  netzKugeln = pos.map((layer, l) => layer.map(([x, y], i) => {
+    const kugel = svgElement("circle", { cx: x, cy: y, r: radius, stroke: "#3a4052", "stroke-width": 1.5 }, svg);
+    kugel.addEventListener("mouseenter", () => fokusSetzen(l, i));
+    kugel.addEventListener("mousemove", e => tooltipZeigen(e, l, i));
+    kugel.addEventListener("mouseleave", fokusAufheben);
+    return kugel;
+  }));
+
+  // Beschriftungen: links Bit-Wertigkeit + Wert, rechts Segment + Ausgabe + Soll
+  eingabeTexte = pos[0].map(([x, y]) =>
+    svgElement("text", { x: x - radius - 14, y: y + schrift * 0.35, "text-anchor": "end", "font-size": schrift }, svg));
+  ausgabeTexte = pos[pos.length - 1].map(([x, y]) =>
+    svgElement("text", { x: x + radius + 14, y: y + schrift * 0.35, "font-size": schrift }, svg));
+
+  if (letzteAkt) netzZeichnen(letzteAkt, false);
+  // Die neuen Elemente kennen die alte Markierung nicht -> Fokus wieder setzen
+  if (fokus) fokusSetzen(...fokus);
+}
+
+// akt = alle Aktivierungen aus vorwaerts(); mitUebergang = false beim Neuaufbau (kein Aufblenden)
+function netzZeichnen(akt, mitUebergang = true) {
+  letzteAkt = akt;
+  document.getElementById("netzbild").style.setProperty("--dauer", mitUebergang ? "0.35s" : "0s");
+  const maxBreite = Math.max(3, radius * 0.45);   // dickste Linie wächst mit der Diagrammgröße
+
+  NETZ.layers.forEach((layer, l) => layer.forEach((neuron, i) => neuron.weights.forEach((w, j) => {
+    // Signal = Gewicht x Aktivierung des sendenden Neurons: genau der Summand w_j * x_j aus dem Forward-Pass
+    const signal = w * akt[l][j];
+    const staerke = Math.min(Math.abs(signal), 4) / 4;   // ab |4| gilt als "volles" Signal
+    const linie = netzLinien[l][i][j];
+    linie.style.stroke = signal >= 0 ? "#4f8cff" : "#ff5a5a";
+    linie.style.strokeWidth = 0.8 + maxBreite * staerke;
+    linie.style.strokeOpacity = 0.06 + 0.9 * staerke;   // ohne Signal nur ganz blass sichtbar
+    linie.dataset.signal = signal;
+  })));
+
+  netzKugeln.forEach((layer, l) => layer.forEach((kugel, i) => {
+    kugel.style.fill = mische([30, 34, 45], [251, 191, 36], akt[l][i]);
+    kugel.style.filter = akt[l][i] > 0.5 ? "url(#glow)" : "none";
+  }));
+
+  eingabeTexte.forEach((t, i) => {
+    t.textContent = "";
+    svgElement("tspan", { fill: "#8b91a3" }, t).textContent = `Bit ${BIT_NAMEN[i]}`;
+    svgElement("tspan", { fill: akt[0][i] ? "#fbbf24" : "#e8eaf0", class: "wert", "font-weight": 700, dx: 10 }, t).textContent = akt[0][i];
+  });
+
+  const zahl = parseInt(akt[0].join(""), 2);
+  const soll = zahl <= 9 ? SOLL[zahl] : null;
+  const aus = akt[akt.length - 1];
+  ausgabeTexte.forEach((t, i) => {
+    t.textContent = "";
+    svgElement("tspan", { fill: "#e8eaf0", "font-weight": 700 }, t).textContent = SEGMENTE[i];
+    svgElement("tspan", { fill: aus[i] >= 0.5 ? "#fbbf24" : "#8b91a3", class: "wert", dx: 12 }, t).textContent = aus[i].toFixed(2);
+    svgElement("tspan", { fill: "#5d6376", dx: 12, "font-size": "0.8em" }, t).textContent = `Soll ${soll ? soll[i] : "–"}`;
+  });
+}
+
+// ---------------------------------------------------------------------
+// Maus über einem Neuron: Verbindungen hervorheben + Info-Box
+// ---------------------------------------------------------------------
+function fokusSetzen(l, i) {
+  fokus = [l, i];
+  document.getElementById("netzbild").classList.add("fokus");
+  netzKugeln[l][i].classList.add("hervor");
+  if (l > 0) {   // eingehende Linien + die Neuronen davor
+    netzLinien[l - 1][i].forEach((linie, j) => { linie.classList.add("hervor"); netzKugeln[l - 1][j].classList.add("hervor"); });
+  }
+  if (l < netzLinien.length) {   // ausgehende Linien + die Neuronen danach
+    netzLinien[l].forEach((ziel, k) => { ziel[i].classList.add("hervor"); netzKugeln[l + 1][k].classList.add("hervor"); });
+  }
+}
+
+function fokusAufheben() {
+  fokus = null;
+  document.getElementById("netzbild").classList.remove("fokus");
+  document.querySelectorAll("#netzbild .hervor").forEach(el => el.classList.remove("hervor"));
+  document.getElementById("tooltip").style.display = "none";
+}
+
+function tooltipZeigen(ereignis, l, i) {
+  const tip = document.getElementById("tooltip");
+  const a = letzteAkt[l][i];
+  if (l === 0) {
+    tip.innerHTML = `<b>Eingang Bit ${BIT_NAMEN[i]}</b><br>Wert <span class="zahl">${a}</span>`;
+  } else {
+    const n = NETZ.layers[l - 1][i];
+    const name = l === GROESSEN.length - 1 ? `Ausgang ${SEGMENTE[i]}` : `Hidden-Neuron ${i + 1}`;
+    // Welches Neuron davor liefert den stärksten Beitrag w * a?
+    const beitraege = n.weights.map((w, j) => w * letzteAkt[l - 1][j]);
+    const staerkster = beitraege.reduce((best, b, j) => (Math.abs(b) > Math.abs(beitraege[best]) ? j : best), 0);
+    const quelle = l === 1 ? `Bit ${BIT_NAMEN[staerkster]}` : `Hidden ${staerkster + 1}`;
+    const z = n.bias + beitraege.reduce((s, b) => s + b, 0);
+    tip.innerHTML = `<b>${name}</b>` +
+      `<br>Summe z = Bias + Σ w·a = <span class="zahl">${z.toFixed(3)}</span>` +
+      `<br>Aktivierung sigmoid(z) = <span class="zahl">${a.toFixed(3)}</span>` +
+      `<br>Bias <span class="zahl">${n.bias.toFixed(3)}</span>` +
+      `<br>stärkstes Signal von ${quelle}: <span class="zahl">${beitraege[staerkster].toFixed(3)}</span>`;
+  }
+  tip.style.display = "block";
+  // Box neben die Maus, aber nicht über den rechten/unteren Rand hinaus
+  tip.style.left = `${Math.min(ereignis.clientX + 16, window.innerWidth - tip.offsetWidth - 10)}px`;
+  tip.style.top = `${Math.min(ereignis.clientY + 16, window.innerHeight - tip.offsetHeight - 10)}px`;
+}
+
+// ---------------------------------------------------------------------
+// Seitenleiste aufbauen
+// ---------------------------------------------------------------------
+let bits = [0, 0, 0, 0];
+const polygone = {};
+const zifferButtons = [], bitButtons = [];
+
+function aufbauen() {
+  const ziffern = document.getElementById("ziffern");
+  for (let z = 0; z < 10; z++) {
+    const b = document.createElement("button");
+    b.textContent = z;
+    b.onclick = () => zifferGewaehlt(z);
+    ziffern.appendChild(b);
+    zifferButtons.push(b);
+  }
+
+  const bitsDiv = document.getElementById("bits");
+  BIT_NAMEN.forEach((wertigkeit, i) => {
+    const box = document.createElement("div");
+    box.className = "bit";
+    const b = document.createElement("button");
+    b.onclick = () => bitUmschalten(i);
+    box.append(b, wertigkeit);
+    bitsDiv.appendChild(box);
+    bitButtons.push(b);
+  });
+
+  const svg = document.getElementById("segmente");
+  for (const [name, [x, y, horizontal]] of Object.entries(POSITION)) {
+    polygone[name] = svgElement("polygon", { points: segmentPunkte(x, y, horizontal).map(pt => pt.join(",")).join(" ") }, svg);
+  }
+
+  netzAufbauen();
+  // Fenstergröße ändert sich -> Diagramm neu an den Platz anpassen
+  new ResizeObserver(() => netzAufbauen()).observe(document.getElementById("buehne"));
+}
+
+// ---------------------------------------------------------------------
+// Eingaben
+// ---------------------------------------------------------------------
+// Ziffer -> 4 Bits, höchstes Bit zuerst (z.B. 5 -> [0, 1, 0, 1])
+function zifferGewaehlt(ziffer) {
+  bits = [3, 2, 1, 0].map(stelle => (ziffer >> stelle) & 1);
+  aktualisieren();
+}
+
+function bitUmschalten(i) {
+  bits[i] = 1 - bits[i];
+  aktualisieren();
+}
+
+// Netz fragen und alles neu zeichnen
+function aktualisieren() {
+  const akt = vorwaerts(NETZ, bits);
+  const ausgaben = akt[akt.length - 1];
+  netzZeichnen(akt);
+  const zahl = parseInt(bits.join(""), 2);
+  const soll = zahl <= 9 ? SOLL[zahl] : null;   // 10-15 hat das Netz nie gesehen
+
+  bitButtons.forEach((b, i) => {
+    b.textContent = bits[i];
+    b.classList.toggle("an", bits[i] === 1);
+  });
+  zifferButtons.forEach((b, z) => b.classList.toggle("gewaehlt", z === zahl));
+
+  // Segmente: Farbe nach Ausgabewert, leuchtende Segmente bekommen einen Glow
+  [...SEGMENTE].forEach((name, i) => {
+    polygone[name].setAttribute("fill", mische([40, 20, 24], [255, 59, 59], ausgaben[i]));
+    polygone[name].style.filter = `drop-shadow(0 0 ${(8 * ausgaben[i]).toFixed(1)}px rgba(255, 59, 59, ${(0.8 * ausgaben[i]).toFixed(2)}))`;
+  });
+
+  const info = document.getElementById("info");
+  const code = `<span class="code">${bits.join("")} = ${zahl}</span>`;
+  if (!soll) {
+    info.innerHTML = `${code}<span class="chip unbekannt">nicht trainiert – das Netz rät</span>`;
+  } else {
+    const richtig = ausgaben.every((w, i) => (w >= 0.5 ? 1 : 0) === soll[i]);
+    info.innerHTML = `${code}<span class="chip ${richtig ? "richtig" : "falsch"}">Netz liegt ${richtig ? "richtig" : "falsch"}</span>`;
+  }
+}
+
+// ---------------------------------------------------------------------
+// TicTacToe: das Netz spielt gegen dich (Ansicht 2)
+// ---------------------------------------------------------------------
+// Das Brett wird aus Sicht des Netzes gespeichert: +1 = Stein des Netzes, -1 = dein Stein, 0 = leer.
+// Genau so wurde das Netz in tictactoe.py trainiert ("+1 = eigener Stein des Spielers am Zug").
+const KI = 1, MENSCH = -1;
+const LINIEN = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
+const ZEICHEN = { [KI]: "◯", [MENSCH]: "✕" };
+let brett = Array(9).fill(0), amZug = MENSCH, spielVorbei = false, letzteEntscheidung = null;
+const punkte = { sieg: 0, remis: 0, niederlage: 0 };
+const felder = [], miniFelder = [];
+
+// Kurze "Denkpause" des Netzes, damit man seinen Zug mitbekommt (im Testmodus sofort)
+const DENKZEIT = new URLSearchParams(location.search).has("test") ? 0 : 450;
+
+function tttGewinner(b) {
+  for (const linie of LINIEN) {
+    const [a, c, d] = linie;
+    if (b[a] !== 0 && b[a] === b[c] && b[a] === b[d]) return { spieler: b[a], linie };
+  }
+  return null;
+}
+
+function tttAufbauen() {
+  for (let i = 0; i < 9; i++) {
+    const feld = document.createElement("button");
+    feld.className = "feld";
+    feld.onclick = () => feldGeklickt(i);
+    document.getElementById("brett").appendChild(feld);
+    felder.push(feld);
+    const mini = document.createElement("div");
+    mini.className = "mini-feld";
+    document.getElementById("mini-brett").appendChild(mini);
+    miniFelder.push(mini);
+  }
+  document.getElementById("ich-beginne").onclick = () => neuesSpiel(false);
+  document.getElementById("netz-beginnt").onclick = () => neuesSpiel(true);
+  document.getElementById("gedanken").onchange = tttZeichnen;
+}
+
+function neuesSpiel(netzBeginnt) {
+  brett = Array(9).fill(0);
+  spielVorbei = false;
+  letzteEntscheidung = null;
+  amZug = netzBeginnt ? KI : MENSCH;
+  tttZeichnen();
+  if (netzBeginnt) netzZugPlanen();
+}
+
+function feldGeklickt(i) {
+  if (spielVorbei || amZug !== MENSCH || brett[i] !== 0) return;
+  brett[i] = MENSCH;
+  nachZug();
+}
+
+function netzZugPlanen() {
+  if (DENKZEIT === 0) netzZieht();
+  else setTimeout(netzZieht, DENKZEIT);
+}
+
+// Das Netz bekommt das Brett als Eingabe und setzt auf das FREIE Feld mit der höchsten Ausgabe
+function netzZieht() {
+  const ausgabe = predict(TTT, brett);
+  const frei = brett.map((f, i) => (f === 0 ? i : -1)).filter(i => i >= 0);
+  const wahl = frei.reduce((beste, i) => (ausgabe[i] > ausgabe[beste] ? i : beste), frei[0]);
+  letzteEntscheidung = { brett: [...brett], ausgabe, wahl };
+  brett[wahl] = KI;
+  nachZug();
+}
+
+// Nach jedem Zug: Spielende prüfen, sonst ist der andere dran
+function nachZug() {
+  const sieger = tttGewinner(brett);
+  if (sieger || brett.every(f => f !== 0)) {
+    spielVorbei = true;
+    if (!sieger) punkte.remis++;
+    else if (sieger.spieler === MENSCH) punkte.sieg++;
+    else punkte.niederlage++;
+  } else {
+    amZug = -amZug;
+  }
+  tttZeichnen();
+  if (!spielVorbei && amZug === KI) netzZugPlanen();
+}
+
+function tttZeichnen() {
+  const sieger = tttGewinner(brett);
+  felder.forEach((feld, i) => {
+    feld.textContent = ZEICHEN[brett[i]] || "";
+    feld.className = "feld" + (brett[i] === KI ? " o" : brett[i] === MENSCH ? " x" : "") +
+                     (sieger && sieger.linie.includes(i) ? " gewinn" : "");
+    feld.disabled = spielVorbei || amZug !== MENSCH || brett[i] !== 0;
+  });
+
+  let status;
+  if (sieger) status = sieger.spieler === MENSCH ? "Du hast gewonnen!" : "Das Netz hat gewonnen.";
+  else if (spielVorbei) status = "Unentschieden.";
+  else status = amZug === MENSCH ? "Du bist am Zug (✕)" : "Das Netz denkt …";
+  document.getElementById("ttt-status").textContent = status;
+
+  document.getElementById("p-sieg").textContent = punkte.sieg;
+  document.getElementById("p-remis").textContent = punkte.remis;
+  document.getElementById("p-niederlage").textContent = punkte.niederlage;
+
+  // Netz-Gedanken: Bewertung beim LETZTEN Zug des Netzes (rückblickend, verrät nichts über die Zukunft)
+  const zeigen = document.getElementById("gedanken").checked;
+  document.getElementById("gedanken-box").hidden = !zeigen;
+  miniFelder.forEach((mini, i) => {
+    mini.className = "mini-feld";
+    mini.style.background = "";
+    if (!letzteEntscheidung) { mini.textContent = ""; return; }
+    const vorher = letzteEntscheidung.brett[i];
+    if (vorher !== 0) {
+      mini.textContent = ZEICHEN[vorher];
+      mini.classList.add("stein");
+    } else {
+      const wert = letzteEntscheidung.ausgabe[i];
+      mini.textContent = `${Math.round(wert * 100)}%`;
+      mini.style.background = mische([28, 32, 43], [120, 90, 20], wert);
+      if (i === letzteEntscheidung.wahl) mini.classList.add("wahl");
+    }
+  });
+}
+
+// ---------------------------------------------------------------------
+// Ansicht wechseln: #tictactoe in der Adresse = Spiel, sonst 7-Segment
+// ---------------------------------------------------------------------
+function ansichtZeigen() {
+  const spiel = location.hash === "#tictactoe";
+  document.getElementById("ansicht-7seg").hidden = spiel;
+  document.getElementById("ansicht-ttt").hidden = !spiel;
+  document.title = spiel ? "TicTacToe gegen das Netz" : "7-Segment-Decoder";
+  fokusAufheben();
+}
+
+// ---------------------------------------------------------------------
+// Start
+// ---------------------------------------------------------------------
+aufbauen();
+tttAufbauen();
+neuesSpiel(false);
+document.getElementById("zum-spiel").onclick = () => { location.hash = "tictactoe"; };
+document.getElementById("zurueck").onclick = () => { location.hash = ""; };
+window.addEventListener("hashchange", ansichtZeigen);
+ansichtZeigen();
+
+// Nur zum Testen/für Screenshots: ?ttt=4,0,8 spielt diese Felder für mich (das Netz antwortet sofort),
+// ?gedanken schaltet die Netz-Gedanken ein
+if (/^\d(,\d)*$/.test(new URLSearchParams(location.search).get("ttt") || "")) {
+  const alteDenkzeit = netzZugPlanen;
+  netzZugPlanen = netzZieht;   // ohne Pause, damit alle Züge sofort gespielt sind
+  new URLSearchParams(location.search).get("ttt").split(",").map(Number).forEach(feldGeklickt);
+  netzZugPlanen = alteDenkzeit;
+}
+if (new URLSearchParams(location.search).has("gedanken")) {
+  document.getElementById("gedanken").checked = true;
+  tttZeichnen();
+}
+const parameter = new URLSearchParams(location.search);
+if (/^[01]{4}$/.test(parameter.get("bits") || "")) {
+  bits = [...parameter.get("bits")].map(Number);
+}
+aktualisieren();
+// Erst nach dem ersten Bild Übergänge einschalten (zwei Frames warten, bis der Browser gezeichnet hat)
+requestAnimationFrame(() => requestAnimationFrame(() => document.body.classList.add("bereit")));
+
+// Nur zum Testen/für Screenshots: ?fokus=1,0 markiert Hidden-Neuron 1 wie mit der Maus
+if (/^\d,\d+$/.test(parameter.get("fokus") || "")) {
+  const [l, i] = parameter.get("fokus").split(",").map(Number);
+  if (netzKugeln[l]?.[i]) {
+    fokusSetzen(l, i);
+    const rechteck = netzKugeln[l][i].getBoundingClientRect();
+    tooltipZeigen({ clientX: rechteck.right, clientY: rechteck.top }, l, i);
+  }
+}
+
+// Testmodus: Ausgaben für alle 16 Eingaben (damit Python sie vergleichen kann) + Klick-Test
+if (parameter.has("test")) {
+  const zeilen = [];
+  for (let zahl = 0; zahl < 16; zahl++) {
+    const eingabe = [3, 2, 1, 0].map(stelle => (zahl >> stelle) & 1);
+    zeilen.push(predict(NETZ, eingabe).map(v => v.toFixed(10)).join(" "));
+  }
+  // Klicks simulieren: Ziffer 5, dann das 8er-Bit umschalten (0101 -> 1101 = 13)
+  const infoText = () => [...document.getElementById("info").children].map(el => el.textContent).join(" | ");
+  zifferButtons[5].click();
+  zeilen.push(`KLICK Ziffer 5: ${bits.join("")} | ${infoText()}`);
+  bitButtons[0].click();
+  zeilen.push(`KLICK Bit 8: ${bits.join("")} | ${infoText()}`);
+  // Netzdiagramm: wie viele Linien Input -> Hidden tragen Signal? (Bit = 0 -> kein Signal)
+  const aktiveLinien = () => netzLinien[0].flat().filter(li => Math.abs(Number(li.dataset.signal)) > 1e-12).length;
+  for (const z of [0, 8, 5, 7]) {
+    zifferButtons[z].click();
+    zeilen.push(`SIGNAL Ziffer ${z}: ${aktiveLinien()} von ${netzLinien[0].flat().length} | Linien gesamt ${document.querySelectorAll("#netzbild line").length} | Kugeln ${document.querySelectorAll("#netzbild circle").length}`);
+  }
+  // Fokus: Maus über Hidden-Neuron 1 -> 4 eingehende + 7 ausgehende Linien hervorgehoben
+  netzKugeln[1][0].dispatchEvent(new MouseEvent("mouseenter"));
+  zeilen.push(`FOKUS Hidden 1: ${document.querySelectorAll("#netzbild line.hervor").length} Linien hervorgehoben`);
+  netzKugeln[1][0].dispatchEvent(new MouseEvent("mouseleave"));
+  zeilen.push(`FOKUS weg: ${document.querySelectorAll("#netzbild .hervor").length} hervorgehoben`);
+
+  // TicTacToe 1: Zug des Netzes für ALLE Stellungen (gleiche Aufzählung wie alle_stellungen() in Python)
+  const gesehen = new Set();
+  const besuchen = b => {
+    const text = b.join(",");
+    if (gesehen.has(text) || tttGewinner(b) || b.every(f => f !== 0)) return;
+    gesehen.add(text);
+    const ausgabe = predict(TTT, b);
+    const frei = b.map((f, i) => (f === 0 ? i : -1)).filter(i => i >= 0);
+    zeilen.push(`TTT ${text} ${frei.reduce((beste, i) => (ausgabe[i] > ausgabe[beste] ? i : beste), frei[0])}`);
+    // Zug setzen und Brett umdrehen: danach ist der Gegner "+1" - wie zug() in Python
+    for (const f of frei) besuchen(b.map((v, i) => -(i === f ? 1 : v)));
+  };
+  besuchen(Array(9).fill(0));
+
+  // TicTacToe 2: Spiel per Klick - ich beginne in der Mitte, dann immer erstes freies Feld
+  const tttStatus = () => document.getElementById("ttt-status").textContent;
+  document.getElementById("zum-spiel").click();
+  ansichtZeigen();
+  zeilen.push(`ANSICHT nach Spiel-Button: 7seg ${document.getElementById("ansicht-7seg").hidden ? "aus" : "an"}, ttt ${document.getElementById("ansicht-ttt").hidden ? "aus" : "an"}`);
+  document.getElementById("ich-beginne").click();
+  felder[4].click();
+  zeilen.push(`SPIEL nach Klick Mitte: ${brett.join(",")} | ${tttStatus()}`);
+  while (!spielVorbei) felder[brett.indexOf(0)].click();
+  zeilen.push(`SPIEL Ende: ${brett.join(",")} | ${tttStatus()} | Punkte ${punkte.sieg}/${punkte.remis}/${punkte.niederlage}`);
+  felder[brett.indexOf(0) >= 0 ? brett.indexOf(0) : 0].click();   // Klick nach Spielende darf nichts ändern
+  zeilen.push(`SPIEL Klick nach Ende: ${brett.join(",")}`);
+  document.getElementById("netz-beginnt").click();
+  zeilen.push(`SPIEL Netz beginnt: ${brett.filter(f => f === KI).length} Stein(e) Netz, ${brett.filter(f => f === MENSCH).length} von mir | ${tttStatus()}`);
+  document.getElementById("gedanken").click();
+  zeilen.push(`GEDANKEN: Box ${document.getElementById("gedanken-box").hidden ? "aus" : "an"}, umrandet Feld ${miniFelder.findIndex(m => m.classList.contains("wahl"))}, Netz setzte Feld ${letzteEntscheidung.wahl}`);
+  document.getElementById("zurueck").click();
+  ansichtZeigen();
+  zeilen.push(`ANSICHT nach Zurück: 7seg ${document.getElementById("ansicht-7seg").hidden ? "aus" : "an"}, ttt ${document.getElementById("ansicht-ttt").hidden ? "aus" : "an"}`);
+  document.getElementById("test").textContent = zeilen.join("\n");
+}
+</script>
+</body>
+</html>

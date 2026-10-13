@@ -1,0 +1,16 @@
+# TensorFlow-Umgebung (1,5 GB) - lässt sich neu anlegen, siehe README
+.venv-tf/
+
+# Python-Zwischendateien
+__pycache__/
+
+# Kompilierte C-Programme (entstehen mit "make" in c/)
+c/nn_forward
+c/nn_header
+
+# Quarto-Zwischendateien
+dokumentation_files/
+.quarto/
+
+# macOS
+.DS_Store

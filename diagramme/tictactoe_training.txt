@@ -1,0 +1,20 @@
+4520 Stellungen als Trainingsdaten, Netz [9, 64, 9], 300 Epochen, Lernrate 0.1
+Epoche    0  Kosten 0.65529  (1 s)
+Epoche   25  Kosten 0.24187  (13 s)
+Epoche   50  Kosten 0.19113  (26 s)
+Epoche   75  Kosten 0.16867  (39 s)
+Epoche  100  Kosten 0.15530  (52 s)
+Epoche  125  Kosten 0.14577  (65 s)
+Epoche  150  Kosten 0.13728  (77 s)
+Epoche  175  Kosten 0.12965  (90 s)
+Epoche  200  Kosten 0.12402  (103 s)
+Epoche  225  Kosten 0.11835  (116 s)
+Epoche  250  Kosten 0.11294  (129 s)
+Epoche  275  Kosten 0.10839  (142 s)
+Epoche  299  Kosten 0.10521  (154 s)
+Optimaler Zug in 4463/4520 Stellungen (98.7 %)
+gegen Zufall   (Netz beginnt  ):  985 Siege,   15 Remis,    0 Niederlagen
+gegen Zufall   (Gegner beginnt):  806 Siege,  177 Remis,   17 Niederlagen
+gegen Minimax  (Netz beginnt  ):    0 Siege,    1 Remis,    0 Niederlagen
+gegen Minimax  (Gegner beginnt):    0 Siege,    0 Remis,    1 Niederlagen
+Gespeichert: export/tictactoe.json

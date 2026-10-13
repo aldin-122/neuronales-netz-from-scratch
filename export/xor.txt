@@ -1,0 +1,16 @@
+# Neuronales Netz - Export aus neural_network.py
+# Aktivierung: sigmoid
+# Anzahl Layer (ohne Input)
+2
+# Layer-Groessen inkl. Input
+2 2 1
+
+# ===== Layer 1: 2 Neuronen, je 2 Eingaenge =====
+# Layer 1, Neuron 0: bias w0 w1
+6.0658643292 -4.0997692910 -4.1094350341
+# Layer 1, Neuron 1: bias w0 w1
+2.2666433275 -5.8608813903 -5.9183356281
+
+# ===== Layer 2: 1 Neuronen, je 2 Eingaenge =====
+# Layer 2, Neuron 0: bias w0 w1
+-3.7342474438 8.0835745337 -8.3532008407

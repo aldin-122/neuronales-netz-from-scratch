@@ -1,0 +1,827 @@
+<!doctype html>
+<!--
+  Vorlage für die Webseite des Projekts. NICHT direkt öffnen:
+  gui_7seg.py setzt hier die trainierten Netze ein und erzeugt daraus web/7seg.html.
+
+  Zwei Ansichten, umgeschaltet über die Adresse (#tictactoe) - so funktioniert auch der Zurück-Button:
+    1. 7-Segment-Decoder: links Seitenleiste (Eingabe, Status, Anzeige, Legende),
+       rechts füllt das Netzdiagramm den restlichen Platz und passt sich an die Fenstergröße an.
+    2. TicTacToe: das TicTacToe-Netz spielt gegen dich.
+
+  Optionale URL-Parameter (praktisch zum Testen):
+    ?bits=0101   startet mit dieser Eingabe
+    ?fokus=1,0   markiert ein Neuron wie beim Darüberfahren mit der Maus (Layer, Index)
+    #tictactoe&  (Adresse endet auf #tictactoe) öffnet direkt das Spiel
+    ?ttt=4,0     spielt diese Felder für mich, das Netz antwortet sofort; ?gedanken zeigt die Netz-Gedanken
+    ?test        schreibt die Ausgaben für alle 16 Eingaben und einen simulierten Klick-Test
+                 in <pre id="test"> (wird von Python ausgewertet)
+-->
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>7-Segment-Decoder</title>
+<style>
+  :root {
+    --hintergrund: #0d0f14;
+    --leiste: #151821;
+    --flaeche: #1c202b;
+    --rand: #2a2f3d;
+    --text: #e8eaf0;
+    --grau: #8b91a3;
+    --akzent: #fbbf24;      /* aktive Neuronen */
+    --segment: #ff3b3b;     /* leuchtende Segmente / gesetzte Bits */
+    --positiv: #4f8cff;
+    --negativ: #ff5a5a;
+    --gruen: #34d399;
+    --gelb: #fbbf24;
+    --rot: #f87171;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--hintergrund);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  [hidden] { display: none !important; }   /* ausgeblendete Ansicht wirklich verstecken */
+  #ansicht-7seg {
+    display: grid;
+    grid-template-columns: clamp(400px, 30vw, 520px) 1fr;
+    height: 100%;
+    overflow: hidden;
+  }
+  #zum-spiel {
+    background: linear-gradient(135deg, #2b3350, #1f2536);
+    border-color: #3b4566; font-size: 16px; font-weight: 600;
+  }
+  #zum-spiel:hover { border-color: var(--positiv); }
+
+  /* ---------------- Seitenleiste ---------------- */
+  aside {
+    background: var(--leiste);
+    border-right: 1px solid var(--rand);
+    padding: 28px 34px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    overflow-y: auto;
+  }
+  h1 { font-size: 26px; margin: 0; letter-spacing: -0.01em; }
+  .nowrap { white-space: nowrap; }
+  .untertitel { color: var(--grau); font-size: 14px; margin: 6px 0 0; line-height: 1.45; }
+  .abschnitt-titel { font-size: 11px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--grau); margin: 0 0 10px; }
+
+  .ziffern { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  button {
+    font: inherit; font-size: 18px; height: 48px;
+    border-radius: 10px; border: 1px solid var(--rand);
+    background: var(--flaeche); color: var(--text); cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, transform 0.1s;
+  }
+  button:hover { background: #262b39; }
+  button:active { transform: scale(0.96); }
+  button.gewaehlt { border-color: var(--segment); box-shadow: 0 0 0 1px var(--segment) inset; }
+
+  .bits { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .bit { display: flex; flex-direction: column; align-items: center; gap: 5px; font-size: 11px; color: var(--grau); }
+  .bit button { width: 100%; font-family: Menlo, Consolas, monospace; font-weight: 700; font-size: 22px; }
+  .bit button.an { background: var(--segment); border-color: var(--segment); color: #fff; box-shadow: 0 0 14px rgba(255, 59, 59, 0.45); }
+
+  #info { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  #info .code { font-family: Menlo, Consolas, monospace; font-size: 22px; }
+  .chip { font-size: 13px; padding: 4px 10px; border-radius: 999px; }
+  .chip.richtig { background: rgba(52, 211, 153, 0.14); color: var(--gruen); }
+  .chip.falsch { background: rgba(248, 113, 113, 0.14); color: var(--rot); }
+  .chip.unbekannt { background: rgba(251, 191, 36, 0.14); color: var(--gelb); }
+
+  .anzeige-rahmen { background: #0a0b0f; border: 1px solid var(--rand); border-radius: 14px; padding: 16px; display: flex; justify-content: center; }
+  #segmente { height: clamp(150px, 21vh, 285px); aspect-ratio: 2 / 3; overflow: visible; }
+  /* Elemente der Seitenleiste nie zusammenquetschen - lieber scrollen */
+  aside > * { flex-shrink: 0; }
+  /* Übergänge erst aktiv, wenn die Seite fertig gezeichnet ist (sonst "fährt" beim Öffnen alles hoch) */
+  body.bereit #segmente polygon { transition: fill 0.25s, filter 0.25s; }
+
+  .legende { margin-top: auto; display: grid; gap: 7px; font-size: 13.5px; color: var(--grau); }
+  .legende span { display: flex; align-items: center; gap: 9px; }
+  .strich { width: 26px; height: 4px; border-radius: 2px; flex: none; }
+  .punkt { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+  .hinweis { font-size: 13px; color: var(--grau); border-top: 1px solid var(--rand); padding-top: 10px; margin-top: 4px; line-height: 1.45; }
+  .legende .abschnitt-titel { margin: 0 0 2px; }
+
+  /* ---------------- Netzdiagramm ---------------- */
+  #buehne { position: relative; min-width: 0; min-height: 0; }
+  #netzbild { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #netzbild circle { cursor: pointer; }
+  body.bereit #netzbild line { transition: stroke var(--dauer, 0.35s), stroke-width var(--dauer, 0.35s), stroke-opacity var(--dauer, 0.35s); }
+  body.bereit #netzbild circle { transition: fill var(--dauer, 0.35s), opacity 0.2s; }
+  #netzbild .wert { font-family: Menlo, Consolas, monospace; }
+  /* Fokus: Maus über einem Neuron -> nur seine Verbindungen bleiben sichtbar */
+  #netzbild.fokus line:not(.hervor) { stroke-opacity: 0.03 !important; }
+  #netzbild.fokus circle:not(.hervor) { opacity: 0.35; }
+
+  #tooltip {
+    position: fixed; pointer-events: none; z-index: 10;
+    background: rgba(21, 24, 33, 0.96); border: 1px solid var(--rand); border-radius: 10px;
+    padding: 10px 12px; font-size: 13px; line-height: 1.55; min-width: 190px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4); display: none;
+  }
+  #tooltip b { color: var(--akzent); font-weight: 600; }
+  #tooltip .zahl { font-family: Menlo, Consolas, monospace; }
+
+  /* Schmale Fenster: Seitenleiste oben, Netz darunter */
+  @media (max-width: 900px) {
+    /* height: auto - sonst bleibt die Seite auf Bildschirmhöhe begrenzt und die Leiste wird abgeschnitten */
+    html, body { height: auto; }
+    #ansicht-7seg { grid-template-columns: 1fr; height: auto; overflow: visible; }
+    aside { border-right: 0; border-bottom: 1px solid var(--rand); overflow: visible; }
+    #buehne { height: 80vh; }
+  }
+
+  /* ---------------- TicTacToe-Ansicht ---------------- */
+  #ansicht-ttt { height: 100%; display: flex; flex-direction: column; }
+  .ttt-kopf { padding: 16px 28px; background: var(--leiste); border-bottom: 1px solid var(--rand); }
+  #zurueck { height: 40px; padding: 0 16px; font-size: 15px; }
+  .ttt-inhalt { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr clamp(340px, 28vw, 440px); }
+  .ttt-spiel { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 26px; padding: 24px; }
+  .brett { --groesse: min(64vh, 540px, 88vw); width: var(--groesse); height: var(--groesse);
+           display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .feld {
+    height: auto; border-radius: 18px; font-size: calc(var(--groesse) / 5); line-height: 1;
+    display: flex; align-items: center; justify-content: center; font-weight: 300;
+  }
+  .feld:disabled { cursor: default; }
+  .feld:disabled:hover { background: var(--flaeche); }
+  .feld:disabled:active { transform: none; }
+  .feld.x { color: var(--positiv); text-shadow: 0 0 18px rgba(79, 140, 255, 0.55); }
+  .feld.o { color: var(--akzent); text-shadow: 0 0 18px rgba(251, 191, 36, 0.55); }
+  .feld.gewinn { background: rgba(52, 211, 153, 0.13); border-color: var(--gruen); }
+  .ttt-status { font-size: 21px; min-height: 1.4em; }
+  .ttt-leiste { background: var(--leiste); border-left: 1px solid var(--rand); padding: 30px 32px;
+                display: flex; flex-direction: column; gap: 22px; overflow-y: auto; }
+  .zwei { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .zwei button { font-size: 15px; }
+  .punkte { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; }
+  .punkte div { background: var(--flaeche); border: 1px solid var(--rand); border-radius: 12px; padding: 10px 4px; font-size: 12px; color: var(--grau); }
+  .punkte b { display: block; font-size: 28px; color: var(--text); font-family: Menlo, Consolas, monospace; margin-bottom: 2px; }
+  .schalter { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 15px; }
+  .schalter input { width: 18px; height: 18px; accent-color: var(--akzent); }
+  .mini-brett { display: grid; grid-template-columns: repeat(3, 64px); gap: 6px; }
+  .mini-feld { height: 64px; border-radius: 10px; background: var(--flaeche); border: 1px solid var(--rand);
+               display: flex; align-items: center; justify-content: center; font-family: Menlo, Consolas, monospace; font-size: 15px; }
+  .mini-feld.stein { color: #5d6376; font-size: 22px; font-family: inherit; }
+  .mini-feld.wahl { outline: 2px solid var(--akzent); outline-offset: 2px; }
+  .zeichen-x { color: var(--positiv); }
+  .zeichen-o { color: var(--akzent); }
+  @media (max-width: 900px) {
+    .ttt-inhalt { grid-template-columns: 1fr; }
+    .ttt-leiste { border-left: 0; border-top: 1px solid var(--rand); }
+  }
+  #test { display: none; }
+</style>
+</head>
+<body>
+<div id="ansicht-7seg">
+<aside>
+  <div>
+    <h1>7-Segment-Decoder</h1>
+    <p class="untertitel">Selbst programmiertes neuronales Netz <span class="nowrap">4 → 16 → 7</span>: aus 4&nbsp;Bits werden die Segmente <span class="nowrap">a–g</span>.</p>
+  </div>
+
+  <div>
+    <p class="abschnitt-titel">Ziffer</p>
+    <div class="ziffern" id="ziffern"></div>
+  </div>
+
+  <div>
+    <p class="abschnitt-titel">Bits</p>
+    <div class="bits" id="bits"></div>
+  </div>
+
+  <div id="info"></div>
+
+  <div class="anzeige-rahmen">
+    <svg id="segmente" viewBox="0 0 200 300" aria-label="7-Segment-Anzeige"></svg>
+  </div>
+
+  <button id="zum-spiel">TicTacToe gegen das Netz spielen →</button>
+
+  <div class="legende">
+    <p class="abschnitt-titel">Linie = Signal (Gewicht × Aktivierung)</p>
+    <span><i class="strich" style="background: var(--positiv)"></i> positiv – schiebt Richtung 1 · dick = stark</span>
+    <span><i class="strich" style="background: var(--negativ)"></i> negativ – schiebt Richtung 0 · blass = kaum</span>
+    <span><i class="punkt" style="background: var(--akzent); box-shadow: 0 0 8px var(--akzent)"></i> Neuron aktiv (hell = nahe 1)</span>
+    <span class="hinweis">Maus über ein Neuron zeigt nur seine Verbindungen und seine Rechnung.</span>
+  </div>
+</aside>
+
+<main id="buehne">
+  <svg id="netzbild" aria-label="Netzdiagramm 4-16-7">
+    <defs>
+      <!-- Weicher Leuchteffekt für aktive Neuronen -->
+      <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+        <feGaussianBlur stdDeviation="5" result="unschaerfe"/>
+        <feMerge><feMergeNode in="unschaerfe"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+  </svg>
+</main>
+</div>
+
+<div id="ansicht-ttt" hidden>
+  <header class="ttt-kopf">
+    <button id="zurueck">← Zurück zum 7-Segment-Decoder</button>
+  </header>
+  <div class="ttt-inhalt">
+    <section class="ttt-spiel">
+      <div class="brett" id="brett"></div>
+      <div class="ttt-status" id="ttt-status"></div>
+    </section>
+    <aside class="ttt-leiste">
+      <div>
+        <h1>TicTacToe</h1>
+        <p class="untertitel">Unser Netz <span class="nowrap">9 → 64 → 9</span> hat die besten Züge von einem perfekten
+          Minimax-Spieler gelernt. Du spielst <span class="zeichen-x">✕</span>, das Netz <span class="zeichen-o">◯</span>.</p>
+      </div>
+      <div>
+        <p class="abschnitt-titel">Neues Spiel</p>
+        <div class="zwei">
+          <button id="ich-beginne">Ich beginne</button>
+          <button id="netz-beginnt">Netz beginnt</button>
+        </div>
+      </div>
+      <div>
+        <p class="abschnitt-titel">Punktestand (aus deiner Sicht)</p>
+        <div class="punkte">
+          <div><b id="p-sieg">0</b>Siege</div>
+          <div><b id="p-remis">0</b>Remis</div>
+          <div><b id="p-niederlage">0</b>Niederlagen</div>
+        </div>
+      </div>
+      <label class="schalter"><input type="checkbox" id="gedanken"> Netz-Gedanken anzeigen</label>
+      <div id="gedanken-box" hidden>
+        <p class="abschnitt-titel">So hat das Netz seinen letzten Zug gewählt</p>
+        <div class="mini-brett" id="mini-brett"></div>
+        <p class="hinweis">Zahl = Ausgabe des Netzes für dieses Feld. Es setzt auf das freie Feld mit dem höchsten
+          Wert (umrandet). Rückblickend angezeigt, damit es dir keinen Tipp für deinen Zug verrät.</p>
+      </div>
+    </aside>
+  </div>
+</div>
+<div id="tooltip"></div>
+<pre id="test"></pre>
+
+<script>
+// Wird von gui_7seg.py ersetzt: das Netz im Format von dump_json() und die Sollwerte Y_7SEG
+const NETZ = /*NETZ_JSON*/null;
+const SOLL = /*SOLL_JSON*/null;
+// Das TicTacToe-Netz (9 -> 64 -> 9), trainiert von tictactoe.py
+const TTT = /*TTT_JSON*/null;
+
+const SEGMENTE = "abcdefg";
+const BIT_NAMEN = [8, 4, 2, 1];
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+// ---------------------------------------------------------------------
+// Das neuronale Netz: nur Forward-Pass, genau wie in C (Part 4/5)
+// ---------------------------------------------------------------------
+function sigmoid(z) {
+  return 1 / (1 + Math.exp(-z));
+}
+
+// Pro Layer: jedes Neuron rechnet sigmoid(bias + Summe(w_j * x_j)).
+// Die Ausgaben eines Layers sind die Eingaben des nächsten.
+// Rückgabe: ALLE Aktivierungen [Eingabe, Layer 1, Layer 2] - die brauchen wir fürs Netzdiagramm.
+function vorwaerts(netz, eingabe) {
+  const alle = [eingabe];
+  let x = eingabe;
+  for (const layer of netz.layers) {
+    x = layer.map(n => sigmoid(n.bias + n.weights.reduce((summe, w, j) => summe + w * x[j], 0)));
+    alle.push(x);
+  }
+  return alle;
+}
+
+// Nur die Ausgabe des letzten Layers
+function predict(netz, eingabe) {
+  const alle = vorwaerts(netz, eingabe);
+  return alle[alle.length - 1];
+}
+
+// ---------------------------------------------------------------------
+// Hilfen
+// ---------------------------------------------------------------------
+function svgElement(typ, attribute, eltern) {
+  const el = document.createElementNS(SVG_NS, typ);
+  for (const [k, v] of Object.entries(attribute)) el.setAttribute(k, v);
+  eltern.appendChild(el);
+  return el;
+}
+
+// Mischt zwei RGB-Farben: a = 0 -> farbe0, a = 1 -> farbe1
+function mische(farbe0, farbe1, a) {
+  const t = Math.min(1, Math.max(0, a));
+  return `rgb(${farbe0.map((v, i) => Math.round(v + (farbe1[i] - v) * t)).join(", ")})`;
+}
+
+// ---------------------------------------------------------------------
+// 7-Segment-Anzeige in der Seitenleiste
+// ---------------------------------------------------------------------
+// Ein Segment als Sechseck mit spitzen Enden. (x, y) = Start der Mittellinie.
+const L = 120, T = 22, OX = 40, OY = 30;
+function segmentPunkte(x, y, horizontal) {
+  const h = T / 2, lu = 3;   // lu: kleine Lücke, damit sich Segmente an den Ecken nicht berühren
+  if (horizontal) {
+    const x1 = x + lu, x2 = x + L - lu;
+    return [[x1, y], [x1 + h, y - h], [x2 - h, y - h], [x2, y], [x2 - h, y + h], [x1 + h, y + h]];
+  }
+  const y1 = y + lu, y2 = y + L - lu;
+  return [[x, y1], [x + h, y1 + h], [x + h, y2 - h], [x, y2], [x - h, y2 - h], [x - h, y1 + h]];
+}
+
+//      aaa
+//     f   b
+//      ggg
+//     e   c
+//      ddd
+const POSITION = {
+  a: [OX, OY, true],          b: [OX + L, OY, false],
+  c: [OX + L, OY + L, false], d: [OX, OY + 2 * L, true],
+  e: [OX, OY + L, false],     f: [OX, OY, false],
+  g: [OX, OY + L, true],
+};
+
+// ---------------------------------------------------------------------
+// Netzdiagramm 4 -> 16 -> 7: füllt den ganzen Platz rechts
+// ---------------------------------------------------------------------
+const GROESSEN = [NETZ.layers[0][0].weights.length, ...NETZ.layers.map(layer => layer.length)];
+const LAYER_NAMEN = ["Eingabe · 4 Bits", "Hidden · 16 Neuronen", "Ausgabe · 7 Segmente"];
+let netzLinien = [], netzKugeln = [], eingabeTexte = [], ausgabeTexte = [];
+let letzteAkt = null, radius = 12;
+let fokus = null;          // Neuron unter der Maus als [layer, index], sonst null
+let letzteGroesse = "";   // damit nur bei echter Größenänderung neu gebaut wird
+
+// Positionen aller Kugeln, passend zur aktuellen Größe der Fläche
+function layout(breite, hoehe) {
+  const links = 140, rechts = 210, oben = 90, unten = 50;
+  const r = Math.max(9, Math.min(18, (hoehe - oben - unten) / Math.max(...GROESSEN) / 2.8));
+  const pos = GROESSEN.map((n, l) => {
+    const x = links + l * (breite - links - rechts) / (GROESSEN.length - 1);
+    const abstand = Math.min(r * 6, (hoehe - oben - unten) / n);
+    const start = oben + (hoehe - oben - unten) / 2 - abstand * (n - 1) / 2;
+    return Array.from({ length: n }, (_, i) => [x, start + i * abstand]);
+  });
+  return { pos, r };
+}
+
+// Baut das Diagramm neu auf - beim Start und immer, wenn sich die Fenstergröße ändert
+function netzAufbauen() {
+  const svg = document.getElementById("netzbild");
+  const { width: breite, height: hoehe } = svg.getBoundingClientRect();
+  if (breite < 50 || hoehe < 50 || `${breite}x${hoehe}` === letzteGroesse) return;
+  letzteGroesse = `${breite}x${hoehe}`;
+  svg.setAttribute("viewBox", `0 0 ${breite} ${hoehe}`);
+  [...svg.querySelectorAll(":scope > :not(defs)")].forEach(el => el.remove());
+
+  const layoutDaten = layout(breite, hoehe);
+  const pos = layoutDaten.pos;
+  radius = layoutDaten.r;
+  const schrift = Math.max(13, Math.min(17, radius * 0.9));
+
+  // Überschriften der Layer
+  pos.forEach((layer, l) => {
+    svgElement("text", { x: layer[0][0], y: 42, "text-anchor": "middle", fill: "#8b91a3", "font-size": 12, "letter-spacing": "0.08em" }, svg)
+      .textContent = LAYER_NAMEN[l].toUpperCase();
+  });
+
+  // Linien zuerst (liegen hinter den Kugeln). netzLinien[l][i][j]: von Neuron j (Layer l) zu Neuron i (Layer l+1)
+  netzLinien = NETZ.layers.map((layer, l) => pos[l + 1].map(([x2, y2]) => pos[l].map(([x1, y1]) =>
+    svgElement("line", { x1, y1, x2, y2, "stroke-linecap": "round" }, svg))));
+
+  netzKugeln = pos.map((layer, l) => layer.map(([x, y], i) => {
+    const kugel = svgElement("circle", { cx: x, cy: y, r: radius, stroke: "#3a4052", "stroke-width": 1.5 }, svg);
+    kugel.addEventListener("mouseenter", () => fokusSetzen(l, i));
+    kugel.addEventListener("mousemove", e => tooltipZeigen(e, l, i));
+    kugel.addEventListener("mouseleave", fokusAufheben);
+    return kugel;
+  }));
+
+  // Beschriftungen: links Bit-Wertigkeit + Wert, rechts Segment + Ausgabe + Soll
+  eingabeTexte = pos[0].map(([x, y]) =>
+    svgElement("text", { x: x - radius - 14, y: y + schrift * 0.35, "text-anchor": "end", "font-size": schrift }, svg));
+  ausgabeTexte = pos[pos.length - 1].map(([x, y]) =>
+    svgElement("text", { x: x + radius + 14, y: y + schrift * 0.35, "font-size": schrift }, svg));
+
+  if (letzteAkt) netzZeichnen(letzteAkt, false);
+  // Die neuen Elemente kennen die alte Markierung nicht -> Fokus wieder setzen
+  if (fokus) fokusSetzen(...fokus);
+}
+
+// akt = alle Aktivierungen aus vorwaerts(); mitUebergang = false beim Neuaufbau (kein Aufblenden)
+function netzZeichnen(akt, mitUebergang = true) {
+  letzteAkt = akt;
+  document.getElementById("netzbild").style.setProperty("--dauer", mitUebergang ? "0.35s" : "0s");
+  const maxBreite = Math.max(3, radius * 0.45);   // dickste Linie wächst mit der Diagrammgröße
+
+  NETZ.layers.forEach((layer, l) => layer.forEach((neuron, i) => neuron.weights.forEach((w, j) => {
+    // Signal = Gewicht x Aktivierung des sendenden Neurons: genau der Summand w_j * x_j aus dem Forward-Pass
+    const signal = w * akt[l][j];
+    const staerke = Math.min(Math.abs(signal), 4) / 4;   // ab |4| gilt als "volles" Signal
+    const linie = netzLinien[l][i][j];
+    linie.style.stroke = signal >= 0 ? "#4f8cff" : "#ff5a5a";
+    linie.style.strokeWidth = 0.8 + maxBreite * staerke;
+    linie.style.strokeOpacity = 0.06 + 0.9 * staerke;   // ohne Signal nur ganz blass sichtbar
+    linie.dataset.signal = signal;
+  })));
+
+  netzKugeln.forEach((layer, l) => layer.forEach((kugel, i) => {
+    kugel.style.fill = mische([30, 34, 45], [251, 191, 36], akt[l][i]);
+    kugel.style.filter = akt[l][i] > 0.5 ? "url(#glow)" : "none";
+  }));
+
+  eingabeTexte.forEach((t, i) => {
+    t.textContent = "";
+    svgElement("tspan", { fill: "#8b91a3" }, t).textContent = `Bit ${BIT_NAMEN[i]}`;
+    svgElement("tspan", { fill: akt[0][i] ? "#fbbf24" : "#e8eaf0", class: "wert", "font-weight": 700, dx: 10 }, t).textContent = akt[0][i];
+  });
+
+  const zahl = parseInt(akt[0].join(""), 2);
+  const soll = zahl <= 9 ? SOLL[zahl] : null;
+  const aus = akt[akt.length - 1];
+  ausgabeTexte.forEach((t, i) => {
+    t.textContent = "";
+    svgElement("tspan", { fill: "#e8eaf0", "font-weight": 700 }, t).textContent = SEGMENTE[i];
+    svgElement("tspan", { fill: aus[i] >= 0.5 ? "#fbbf24" : "#8b91a3", class: "wert", dx: 12 }, t).textContent = aus[i].toFixed(2);
+    svgElement("tspan", { fill: "#5d6376", dx: 12, "font-size": "0.8em" }, t).textContent = `Soll ${soll ? soll[i] : "–"}`;
+  });
+}
+
+// ---------------------------------------------------------------------
+// Maus über einem Neuron: Verbindungen hervorheben + Info-Box
+// ---------------------------------------------------------------------
+function fokusSetzen(l, i) {
+  fokus = [l, i];
+  document.getElementById("netzbild").classList.add("fokus");
+  netzKugeln[l][i].classList.add("hervor");
+  if (l > 0) {   // eingehende Linien + die Neuronen davor
+    netzLinien[l - 1][i].forEach((linie, j) => { linie.classList.add("hervor"); netzKugeln[l - 1][j].classList.add("hervor"); });
+  }
+  if (l < netzLinien.length) {   // ausgehende Linien + die Neuronen danach
+    netzLinien[l].forEach((ziel, k) => { ziel[i].classList.add("hervor"); netzKugeln[l + 1][k].classList.add("hervor"); });
+  }
+}
+
+function fokusAufheben() {
+  fokus = null;
+  document.getElementById("netzbild").classList.remove("fokus");
+  document.querySelectorAll("#netzbild .hervor").forEach(el => el.classList.remove("hervor"));
+  document.getElementById("tooltip").style.display = "none";
+}
+
+function tooltipZeigen(ereignis, l, i) {
+  const tip = document.getElementById("tooltip");
+  const a = letzteAkt[l][i];
+  if (l === 0) {
+    tip.innerHTML = `<b>Eingang Bit ${BIT_NAMEN[i]}</b><br>Wert <span class="zahl">${a}</span>`;
+  } else {
+    const n = NETZ.layers[l - 1][i];
+    const name = l === GROESSEN.length - 1 ? `Ausgang ${SEGMENTE[i]}` : `Hidden-Neuron ${i + 1}`;
+    // Welches Neuron davor liefert den stärksten Beitrag w * a?
+    const beitraege = n.weights.map((w, j) => w * letzteAkt[l - 1][j]);
+    const staerkster = beitraege.reduce((best, b, j) => (Math.abs(b) > Math.abs(beitraege[best]) ? j : best), 0);
+    const quelle = l === 1 ? `Bit ${BIT_NAMEN[staerkster]}` : `Hidden ${staerkster + 1}`;
+    const z = n.bias + beitraege.reduce((s, b) => s + b, 0);
+    tip.innerHTML = `<b>${name}</b>` +
+      `<br>Summe z = Bias + Σ w·a = <span class="zahl">${z.toFixed(3)}</span>` +
+      `<br>Aktivierung sigmoid(z) = <span class="zahl">${a.toFixed(3)}</span>` +
+      `<br>Bias <span class="zahl">${n.bias.toFixed(3)}</span>` +
+      `<br>stärkstes Signal von ${quelle}: <span class="zahl">${beitraege[staerkster].toFixed(3)}</span>`;
+  }
+  tip.style.display = "block";
+  // Box neben die Maus, aber nicht über den rechten/unteren Rand hinaus
+  tip.style.left = `${Math.min(ereignis.clientX + 16, window.innerWidth - tip.offsetWidth - 10)}px`;
+  tip.style.top = `${Math.min(ereignis.clientY + 16, window.innerHeight - tip.offsetHeight - 10)}px`;
+}
+
+// ---------------------------------------------------------------------
+// Seitenleiste aufbauen
+// ---------------------------------------------------------------------
+let bits = [0, 0, 0, 0];
+const polygone = {};
+const zifferButtons = [], bitButtons = [];
+
+function aufbauen() {
+  const ziffern = document.getElementById("ziffern");
+  for (let z = 0; z < 10; z++) {
+    const b = document.createElement("button");
+    b.textContent = z;
+    b.onclick = () => zifferGewaehlt(z);
+    ziffern.appendChild(b);
+    zifferButtons.push(b);
+  }
+
+  const bitsDiv = document.getElementById("bits");
+  BIT_NAMEN.forEach((wertigkeit, i) => {
+    const box = document.createElement("div");
+    box.className = "bit";
+    const b = document.createElement("button");
+    b.onclick = () => bitUmschalten(i);
+    box.append(b, wertigkeit);
+    bitsDiv.appendChild(box);
+    bitButtons.push(b);
+  });
+
+  const svg = document.getElementById("segmente");
+  for (const [name, [x, y, horizontal]] of Object.entries(POSITION)) {
+    polygone[name] = svgElement("polygon", { points: segmentPunkte(x, y, horizontal).map(pt => pt.join(",")).join(" ") }, svg);
+  }
+
+  netzAufbauen();
+  // Fenstergröße ändert sich -> Diagramm neu an den Platz anpassen
+  new ResizeObserver(() => netzAufbauen()).observe(document.getElementById("buehne"));
+}
+
+// ---------------------------------------------------------------------
+// Eingaben
+// ---------------------------------------------------------------------
+// Ziffer -> 4 Bits, höchstes Bit zuerst (z.B. 5 -> [0, 1, 0, 1])
+function zifferGewaehlt(ziffer) {
+  bits = [3, 2, 1, 0].map(stelle => (ziffer >> stelle) & 1);
+  aktualisieren();
+}
+
+function bitUmschalten(i) {
+  bits[i] = 1 - bits[i];
+  aktualisieren();
+}
+
+// Netz fragen und alles neu zeichnen
+function aktualisieren() {
+  const akt = vorwaerts(NETZ, bits);
+  const ausgaben = akt[akt.length - 1];
+  netzZeichnen(akt);
+  const zahl = parseInt(bits.join(""), 2);
+  const soll = zahl <= 9 ? SOLL[zahl] : null;   // 10-15 hat das Netz nie gesehen
+
+  bitButtons.forEach((b, i) => {
+    b.textContent = bits[i];
+    b.classList.toggle("an", bits[i] === 1);
+  });
+  zifferButtons.forEach((b, z) => b.classList.toggle("gewaehlt", z === zahl));
+
+  // Segmente: Farbe nach Ausgabewert, leuchtende Segmente bekommen einen Glow
+  [...SEGMENTE].forEach((name, i) => {
+    polygone[name].setAttribute("fill", mische([40, 20, 24], [255, 59, 59], ausgaben[i]));
+    polygone[name].style.filter = `drop-shadow(0 0 ${(8 * ausgaben[i]).toFixed(1)}px rgba(255, 59, 59, ${(0.8 * ausgaben[i]).toFixed(2)}))`;
+  });
+
+  const info = document.getElementById("info");
+  const code = `<span class="code">${bits.join("")} = ${zahl}</span>`;
+  if (!soll) {
+    info.innerHTML = `${code}<span class="chip unbekannt">nicht trainiert – das Netz rät</span>`;
+  } else {
+    const richtig = ausgaben.every((w, i) => (w >= 0.5 ? 1 : 0) === soll[i]);
+    info.innerHTML = `${code}<span class="chip ${richtig ? "richtig" : "falsch"}">Netz liegt ${richtig ? "richtig" : "falsch"}</span>`;
+  }
+}
+
+// ---------------------------------------------------------------------
+// TicTacToe: das Netz spielt gegen dich (Ansicht 2)
+// ---------------------------------------------------------------------
+// Das Brett wird aus Sicht des Netzes gespeichert: +1 = Stein des Netzes, -1 = dein Stein, 0 = leer.
+// Genau so wurde das Netz in tictactoe.py trainiert ("+1 = eigener Stein des Spielers am Zug").
+const KI = 1, MENSCH = -1;
+const LINIEN = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
+const ZEICHEN = { [KI]: "◯", [MENSCH]: "✕" };
+let brett = Array(9).fill(0), amZug = MENSCH, spielVorbei = false, letzteEntscheidung = null;
+const punkte = { sieg: 0, remis: 0, niederlage: 0 };
+const felder = [], miniFelder = [];
+
+// Kurze "Denkpause" des Netzes, damit man seinen Zug mitbekommt (im Testmodus sofort)
+const DENKZEIT = new URLSearchParams(location.search).has("test") ? 0 : 450;
+
+function tttGewinner(b) {
+  for (const linie of LINIEN) {
+    const [a, c, d] = linie;
+    if (b[a] !== 0 && b[a] === b[c] && b[a] === b[d]) return { spieler: b[a], linie };
+  }
+  return null;
+}
+
+function tttAufbauen() {
+  for (let i = 0; i < 9; i++) {
+    const feld = document.createElement("button");
+    feld.className = "feld";
+    feld.onclick = () => feldGeklickt(i);
+    document.getElementById("brett").appendChild(feld);
+    felder.push(feld);
+    const mini = document.createElement("div");
+    mini.className = "mini-feld";
+    document.getElementById("mini-brett").appendChild(mini);
+    miniFelder.push(mini);
+  }
+  document.getElementById("ich-beginne").onclick = () => neuesSpiel(false);
+  document.getElementById("netz-beginnt").onclick = () => neuesSpiel(true);
+  document.getElementById("gedanken").onchange = tttZeichnen;
+}
+
+function neuesSpiel(netzBeginnt) {
+  brett = Array(9).fill(0);
+  spielVorbei = false;
+  letzteEntscheidung = null;
+  amZug = netzBeginnt ? KI : MENSCH;
+  tttZeichnen();
+  if (netzBeginnt) netzZugPlanen();
+}
+
+function feldGeklickt(i) {
+  if (spielVorbei || amZug !== MENSCH || brett[i] !== 0) return;
+  brett[i] = MENSCH;
+  nachZug();
+}
+
+function netzZugPlanen() {
+  if (DENKZEIT === 0) netzZieht();
+  else setTimeout(netzZieht, DENKZEIT);
+}
+
+// Das Netz bekommt das Brett als Eingabe und setzt auf das FREIE Feld mit der höchsten Ausgabe
+function netzZieht() {
+  const ausgabe = predict(TTT, brett);
+  const frei = brett.map((f, i) => (f === 0 ? i : -1)).filter(i => i >= 0);
+  const wahl = frei.reduce((beste, i) => (ausgabe[i] > ausgabe[beste] ? i : beste), frei[0]);
+  letzteEntscheidung = { brett: [...brett], ausgabe, wahl };
+  brett[wahl] = KI;
+  nachZug();
+}
+
+// Nach jedem Zug: Spielende prüfen, sonst ist der andere dran
+function nachZug() {
+  const sieger = tttGewinner(brett);
+  if (sieger || brett.every(f => f !== 0)) {
+    spielVorbei = true;
+    if (!sieger) punkte.remis++;
+    else if (sieger.spieler === MENSCH) punkte.sieg++;
+    else punkte.niederlage++;
+  } else {
+    amZug = -amZug;
+  }
+  tttZeichnen();
+  if (!spielVorbei && amZug === KI) netzZugPlanen();
+}
+
+function tttZeichnen() {
+  const sieger = tttGewinner(brett);
+  felder.forEach((feld, i) => {
+    feld.textContent = ZEICHEN[brett[i]] || "";
+    feld.className = "feld" + (brett[i] === KI ? " o" : brett[i] === MENSCH ? " x" : "") +
+                     (sieger && sieger.linie.includes(i) ? " gewinn" : "");
+    feld.disabled = spielVorbei || amZug !== MENSCH || brett[i] !== 0;
+  });
+
+  let status;
+  if (sieger) status = sieger.spieler === MENSCH ? "Du hast gewonnen!" : "Das Netz hat gewonnen.";
+  else if (spielVorbei) status = "Unentschieden.";
+  else status = amZug === MENSCH ? "Du bist am Zug (✕)" : "Das Netz denkt …";
+  document.getElementById("ttt-status").textContent = status;
+
+  document.getElementById("p-sieg").textContent = punkte.sieg;
+  document.getElementById("p-remis").textContent = punkte.remis;
+  document.getElementById("p-niederlage").textContent = punkte.niederlage;
+
+  // Netz-Gedanken: Bewertung beim LETZTEN Zug des Netzes (rückblickend, verrät nichts über die Zukunft)
+  const zeigen = document.getElementById("gedanken").checked;
+  document.getElementById("gedanken-box").hidden = !zeigen;
+  miniFelder.forEach((mini, i) => {
+    mini.className = "mini-feld";
+    mini.style.background = "";
+    if (!letzteEntscheidung) { mini.textContent = ""; return; }
+    const vorher = letzteEntscheidung.brett[i];
+    if (vorher !== 0) {
+      mini.textContent = ZEICHEN[vorher];
+      mini.classList.add("stein");
+    } else {
+      const wert = letzteEntscheidung.ausgabe[i];
+      mini.textContent = `${Math.round(wert * 100)}%`;
+      mini.style.background = mische([28, 32, 43], [120, 90, 20], wert);
+      if (i === letzteEntscheidung.wahl) mini.classList.add("wahl");
+    }
+  });
+}
+
+// ---------------------------------------------------------------------
+// Ansicht wechseln: #tictactoe in der Adresse = Spiel, sonst 7-Segment
+// ---------------------------------------------------------------------
+function ansichtZeigen() {
+  const spiel = location.hash === "#tictactoe";
+  document.getElementById("ansicht-7seg").hidden = spiel;
+  document.getElementById("ansicht-ttt").hidden = !spiel;
+  document.title = spiel ? "TicTacToe gegen das Netz" : "7-Segment-Decoder";
+  fokusAufheben();
+}
+
+// ---------------------------------------------------------------------
+// Start
+// ---------------------------------------------------------------------
+aufbauen();
+tttAufbauen();
+neuesSpiel(false);
+document.getElementById("zum-spiel").onclick = () => { location.hash = "tictactoe"; };
+document.getElementById("zurueck").onclick = () => { location.hash = ""; };
+window.addEventListener("hashchange", ansichtZeigen);
+ansichtZeigen();
+
+// Nur zum Testen/für Screenshots: ?ttt=4,0,8 spielt diese Felder für mich (das Netz antwortet sofort),
+// ?gedanken schaltet die Netz-Gedanken ein
+if (/^\d(,\d)*$/.test(new URLSearchParams(location.search).get("ttt") || "")) {
+  const alteDenkzeit = netzZugPlanen;
+  netzZugPlanen = netzZieht;   // ohne Pause, damit alle Züge sofort gespielt sind
+  new URLSearchParams(location.search).get("ttt").split(",").map(Number).forEach(feldGeklickt);
+  netzZugPlanen = alteDenkzeit;
+}
+if (new URLSearchParams(location.search).has("gedanken")) {
+  document.getElementById("gedanken").checked = true;
+  tttZeichnen();
+}
+const parameter = new URLSearchParams(location.search);
+if (/^[01]{4}$/.test(parameter.get("bits") || "")) {
+  bits = [...parameter.get("bits")].map(Number);
+}
+aktualisieren();
+// Erst nach dem ersten Bild Übergänge einschalten (zwei Frames warten, bis der Browser gezeichnet hat)
+requestAnimationFrame(() => requestAnimationFrame(() => document.body.classList.add("bereit")));
+
+// Nur zum Testen/für Screenshots: ?fokus=1,0 markiert Hidden-Neuron 1 wie mit der Maus
+if (/^\d,\d+$/.test(parameter.get("fokus") || "")) {
+  const [l, i] = parameter.get("fokus").split(",").map(Number);
+  if (netzKugeln[l]?.[i]) {
+    fokusSetzen(l, i);
+    const rechteck = netzKugeln[l][i].getBoundingClientRect();
+    tooltipZeigen({ clientX: rechteck.right, clientY: rechteck.top }, l, i);
+  }
+}
+
+// Testmodus: Ausgaben für alle 16 Eingaben (damit Python sie vergleichen kann) + Klick-Test
+if (parameter.has("test")) {
+  const zeilen = [];
+  for (let zahl = 0; zahl < 16; zahl++) {
+    const eingabe = [3, 2, 1, 0].map(stelle => (zahl >> stelle) & 1);
+    zeilen.push(predict(NETZ, eingabe).map(v => v.toFixed(10)).join(" "));
+  }
+  // Klicks simulieren: Ziffer 5, dann das 8er-Bit umschalten (0101 -> 1101 = 13)
+  const infoText = () => [...document.getElementById("info").children].map(el => el.textContent).join(" | ");
+  zifferButtons[5].click();
+  zeilen.push(`KLICK Ziffer 5: ${bits.join("")} | ${infoText()}`);
+  bitButtons[0].click();
+  zeilen.push(`KLICK Bit 8: ${bits.join("")} | ${infoText()}`);
+  // Netzdiagramm: wie viele Linien Input -> Hidden tragen Signal? (Bit = 0 -> kein Signal)
+  const aktiveLinien = () => netzLinien[0].flat().filter(li => Math.abs(Number(li.dataset.signal)) > 1e-12).length;
+  for (const z of [0, 8, 5, 7]) {
+    zifferButtons[z].click();
+    zeilen.push(`SIGNAL Ziffer ${z}: ${aktiveLinien()} von ${netzLinien[0].flat().length} | Linien gesamt ${document.querySelectorAll("#netzbild line").length} | Kugeln ${document.querySelectorAll("#netzbild circle").length}`);
+  }
+  // Fokus: Maus über Hidden-Neuron 1 -> 4 eingehende + 7 ausgehende Linien hervorgehoben
+  netzKugeln[1][0].dispatchEvent(new MouseEvent("mouseenter"));
+  zeilen.push(`FOKUS Hidden 1: ${document.querySelectorAll("#netzbild line.hervor").length} Linien hervorgehoben`);
+  netzKugeln[1][0].dispatchEvent(new MouseEvent("mouseleave"));
+  zeilen.push(`FOKUS weg: ${document.querySelectorAll("#netzbild .hervor").length} hervorgehoben`);
+
+  // TicTacToe 1: Zug des Netzes für ALLE Stellungen (gleiche Aufzählung wie alle_stellungen() in Python)
+  const gesehen = new Set();
+  const besuchen = b => {
+    const text = b.join(",");
+    if (gesehen.has(text) || tttGewinner(b) || b.every(f => f !== 0)) return;
+    gesehen.add(text);
+    const ausgabe = predict(TTT, b);
+    const frei = b.map((f, i) => (f === 0 ? i : -1)).filter(i => i >= 0);
+    zeilen.push(`TTT ${text} ${frei.reduce((beste, i) => (ausgabe[i] > ausgabe[beste] ? i : beste), frei[0])}`);
+    // Zug setzen und Brett umdrehen: danach ist der Gegner "+1" - wie zug() in Python
+    for (const f of frei) besuchen(b.map((v, i) => -(i === f ? 1 : v)));
+  };
+  besuchen(Array(9).fill(0));
+
+  // TicTacToe 2: Spiel per Klick - ich beginne in der Mitte, dann immer erstes freies Feld
+  const tttStatus = () => document.getElementById("ttt-status").textContent;
+  document.getElementById("zum-spiel").click();
+  ansichtZeigen();
+  zeilen.push(`ANSICHT nach Spiel-Button: 7seg ${document.getElementById("ansicht-7seg").hidden ? "aus" : "an"}, ttt ${document.getElementById("ansicht-ttt").hidden ? "aus" : "an"}`);
+  document.getElementById("ich-beginne").click();
+  felder[4].click();
+  zeilen.push(`SPIEL nach Klick Mitte: ${brett.join(",")} | ${tttStatus()}`);
+  while (!spielVorbei) felder[brett.indexOf(0)].click();
+  zeilen.push(`SPIEL Ende: ${brett.join(",")} | ${tttStatus()} | Punkte ${punkte.sieg}/${punkte.remis}/${punkte.niederlage}`);
+  felder[brett.indexOf(0) >= 0 ? brett.indexOf(0) : 0].click();   // Klick nach Spielende darf nichts ändern
+  zeilen.push(`SPIEL Klick nach Ende: ${brett.join(",")}`);
+  document.getElementById("netz-beginnt").click();
+  zeilen.push(`SPIEL Netz beginnt: ${brett.filter(f => f === KI).length} Stein(e) Netz, ${brett.filter(f => f === MENSCH).length} von mir | ${tttStatus()}`);
+  document.getElementById("gedanken").click();
+  zeilen.push(`GEDANKEN: Box ${document.getElementById("gedanken-box").hidden ? "aus" : "an"}, umrandet Feld ${miniFelder.findIndex(m => m.classList.contains("wahl"))}, Netz setzte Feld ${letzteEntscheidung.wahl}`);
+  document.getElementById("zurueck").click();
+  ansichtZeigen();
+  zeilen.push(`ANSICHT nach Zurück: 7seg ${document.getElementById("ansicht-7seg").hidden ? "aus" : "an"}, ttt ${document.getElementById("ansicht-ttt").hidden ? "aus" : "an"}`);
+  document.getElementById("test").textContent = zeilen.join("\n");
+}
+</script>
+</body>
+</html>
