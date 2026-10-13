@@ -49,6 +49,7 @@ Zeit und Tokens wurden aus dem lokalen Gesprächsverlauf von Claude Code berechn
 | 42 | Quarto | Wie hast du TicTacToe trainiert? | Erklärung der Trainingsschritte mit Verweis auf die Funktionen in `tictactoe.py` (Stellungen, Minimax-Ziele, Training 300 Epochen mit Mischen, Messung, Speichern) | – | – |
 | 43 | Quarto | Befehl zum Starten der Website | `cd …/Neuronales_Netzwerk && python3 gui_7seg.py` | – | – |
 | 44 | Git | Abgabe an den Lehrer über ein Git-Repo mit Link; KI darf alles übernehmen, Passwörter gibt der Nutzer selbst ein | Rückfragen: GitHub, öffentlich, Angabe-PDF mit; Projekt auf private Daten geprüft (ein temporärer Pfad im Log entfernt); `.gitignore` (ohne .venv-tf, Kompilate, Zwischendateien) + `README.md` als Startseite; Git-Repo angelegt und hochgeladen | – | – |
+| 45 | Git | GitHub Pages einschalten, damit der Lehrer Doku und Webseite direkt im Browser sieht | Pages aktiviert (Branch main), README um direkte Links ergänzt, hochgeladen; Links ohne Login geprüft | – | – |
 
 ## Zeit und Tokens – Zusammenfassung
 

@@ -4,11 +4,18 @@
 
 Ein neuronales Netz, **komplett selbst programmiert** mit Python und numpy (ohne KI-Bibliothek). Es lernt per Backpropagation, speichert sich als JSON, TXT und C-Header und läuft danach auch **in C** und **im Browser**. Grundlage ist die Angabe [`4AHITS_NN_from_scratch.pdf`](4AHITS_NN_from_scratch.pdf), Part 1–5. Part 6 (ESP32) entfällt, wir arbeiten rein digital.
 
+## Direkt im Browser ansehen
+
+| | Link |
+|---|---|
+| 📄 **Dokumentation** (Quarto) | **https://aldin-122.github.io/neuronales-netz-from-scratch/dokumentation.html** |
+| 🔢 **7-Segment-Decoder + TicTacToe** (Webseite zum Ausprobieren) | **https://aldin-122.github.io/neuronales-netz-from-scratch/web/7seg.html** |
+
 ## Dokumentation
 
 | Datei | Inhalt |
 |---|---|
-| **[`dokumentation.html`](dokumentation.html)** | **Abgabe-Doku (Quarto):** Vorgehen, was gut lief und wo wir nachbessern mussten, Ergebnisse, Technik kompakt. Herunterladen und im Browser öffnen. |
+| **[`dokumentation.html`](dokumentation.html)** | **Abgabe-Doku (Quarto):** Vorgehen, was gut lief und wo wir nachbessern mussten, Ergebnisse, Technik kompakt. Am besten über den Link oben öffnen. |
 | [`DOKUMENTATION.md`](DOKUMENTATION.md) | Ausführliche technische Doku: Theorie mit Formeln, Code, Ergebnisse, Entscheidungen |
 | [`PROMPTS.md`](PROMPTS.md) | Alle Prompts an die KI (Claude Code) mit Ergebnis, Zeit und Tokens |
 | [`PLAN.md`](PLAN.md) | Der Phasenplan mit Status |
@@ -37,7 +44,7 @@ cd c && make run               # Part 4 + 5: Forward-Pass in C
 python3 gui_7seg.py            # Webseite: 7-Segment mit Netzdiagramm + TicTacToe gegen das Netz
 ```
 
-Die Webseite gibt es auch fertig erzeugt: [`web/7seg.html`](web/7seg.html) herunterladen und im Browser öffnen.
+Die Webseite gibt es auch fertig erzeugt, siehe Link oben („7-Segment-Decoder + TicTacToe“).
 
 **Part 3 (TensorFlow)** läuft in einer eigenen Umgebung:
 ```bash
